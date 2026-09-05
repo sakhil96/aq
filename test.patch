@@ -1686,3 +1686,5 @@ index 0000000000000000000000000000000000000000..233e7b770071f3d0b458a996711ebf60
 +  assert.deepEqual(sorted(snapshotIds), sorted(repeated.snapshots.map((row) => row.id)));
 +  assert.deepEqual(sorted(journalIds), sorted(repeated.journalLines.map((row) => row.id)));
 +});
+
+# End of test patch.
