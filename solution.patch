@@ -1,6 +1,6 @@
 diff --git a/src/close/allocation.js b/src/close/allocation.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..ab55589d552b253756d01e0150a20541c13c3fdd
+index 0000000..ab55589
 --- /dev/null
 +++ b/src/close/allocation.js
 @@ -0,0 +1,508 @@
@@ -514,7 +514,7 @@ index 0000000000000000000000000000000000000000..ab55589d552b253756d01e0150a20541
 +}
 diff --git a/src/close/artifacts.js b/src/close/artifacts.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..e79830a7be09e69c9a45c8a6701af93384294ae6
+index 0000000..e79830a
 --- /dev/null
 +++ b/src/close/artifacts.js
 @@ -0,0 +1,496 @@
@@ -1016,7 +1016,7 @@ index 0000000000000000000000000000000000000000..e79830a7be09e69c9a45c8a6701af933
 +}
 diff --git a/src/close/measurements.js b/src/close/measurements.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..6983f8cc56f256582160aef13a96a39799f016a8
+index 0000000..6983f8c
 --- /dev/null
 +++ b/src/close/measurements.js
 @@ -0,0 +1,403 @@
@@ -1425,7 +1425,7 @@ index 0000000000000000000000000000000000000000..6983f8cc56f256582160aef13a96a397
 +}
 diff --git a/src/close/monthClose.js b/src/close/monthClose.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..97a81ecbed77957a1f70661a53f3592a6065ce69
+index 0000000..97a81ec
 --- /dev/null
 +++ b/src/close/monthClose.js
 @@ -0,0 +1,267 @@
@@ -1698,7 +1698,7 @@ index 0000000000000000000000000000000000000000..97a81ecbed77957a1f70661a53f3592a
 +}
 diff --git a/src/close/settlement.js b/src/close/settlement.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..7a2f3bfa8d87842c2acc692028378257fccf77a5
+index 0000000..7a2f3bf
 --- /dev/null
 +++ b/src/close/settlement.js
 @@ -0,0 +1,525 @@
@@ -2228,7 +2228,7 @@ index 0000000000000000000000000000000000000000..7a2f3bfa8d87842c2acc692028378257
 +  };
 +}
 diff --git a/src/core/util.js b/src/core/util.js
-index c46157b9ec71d09173c1f5b47d7c6671e64b9521..911ca92267a649b6a8dbed07fbb294b4c8a21c9c 100644
+index c46157b..911ca92 100644
 --- a/src/core/util.js
 +++ b/src/core/util.js
 @@ -12,3 +12,7 @@ export function asTrimmed(value) {
@@ -2247,18 +2247,21 @@ index c46157b9ec71d09173c1f5b47d7c6671e64b9521..911ca92267a649b6a8dbed07fbb294b4
 +  return Number.isFinite(result) ? result : null;
  }
 diff --git a/src/index.js b/src/index.js
-index d032647f4dc3da0c36a2582df7687b9a7895ba22..f0582bb47c3754a6b8053db6b45a2ebbbc7cc498 100644
+index d032647..8aad252 100644
 --- a/src/index.js
 +++ b/src/index.js
-@@ -70 +70,6 @@ export * from './settle/severance.js';
+@@ -70 +70,9 @@ export * from './settle/severance.js';
  export * from './settle/escheat.js';
-+export * from './close/measurements.js';
-+export * from './close/allocation.js';
-+export * from './close/settlement.js';
-+export * from './close/artifacts.js';
-+export * from './close/monthClose.js';
++export { collectCloseMeasurements } from './close/measurements.js';
++export { allocateCloseVolumes } from './close/allocation.js';
++export { settleCloseOwners } from './close/settlement.js';
++export { buildCloseArtifacts } from './close/artifacts.js';
++export {
++  normalizeCloseRequest,
++  closeProductionMonth,
++} from './close/monthClose.js';
 diff --git a/src/tickets/runTicket.js b/src/tickets/runTicket.js
-index 954286911d3ad8bfd44f8075ae4aa5200fce9085..9410ed41528f483381ab95aa4463bb03526cd1ab 100644
+index 9542869..9410ed4 100644
 --- a/src/tickets/runTicket.js
 +++ b/src/tickets/runTicket.js
 @@ -217,3 +217,3 @@ export function netRunTicket(input) {
