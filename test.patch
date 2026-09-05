@@ -1,0 +1,1658 @@
+diff --git a/test/close/closeStages.test.js b/test/close/closeStages.test.js
+new file mode 100644
+index 0000000..edcf8a6
+--- /dev/null
++++ b/test/close/closeStages.test.js
+@@ -0,0 +1,968 @@
++import assert from 'node:assert/strict';
++import { test } from 'node:test';
++import * as api from '../../src/index.js';
++
++const MONTH = '2024-02';
++
++function oilTicket(overrides = {}) {
++  return {
++    id: 'O-1',
++    battery: 'BAT-1',
++    gaugeDate: '2024-02-10',
++    gross: 100,
++    bswPct: 2,
++    api: 40,
++    tempF: 60,
++    ...overrides,
++  };
++}
++
++function gasTicket(overrides = {}) {
++  return {
++    id: 'G-1',
++    battery: 'BAT-1',
++    startOn: '2024-02-01',
++    endOn: '2024-02-29',
++    mcf: 100,
++    btu: 1100,
++    co2Pct: 5,
++    n2Pct: 5,
++    wetDry: 'wet',
++    ...overrides,
++  };
++}
++
++function waterTicket(overrides = {}) {
++  return {
++    id: 'H-1',
++    battery: 'BAT-1',
++    hauledOn: '2024-02-15',
++    bbl: 30,
++    direction: 'out',
++    ...overrides,
++  };
++}
++
++function groundTicketPayload() {
++  return {
++    oilTickets: [oilTicket()],
++    gasTickets: [gasTicket()],
++    waterTickets: [waterTicket()],
++  };
++}
++
++function groundTheoreticals() {
++  return [
++    {
++      id: 'T-W1',
++      well: 'W1',
++      battery: 'BAT-1',
++      monthOn: '2024-02-01',
++      oil: 3,
++      gas: 1,
++      water: 2,
++    },
++    {
++      id: 'T-W2',
++      well: 'W2',
++      battery: 'BAT-1',
++      monthOn: '2024-02-01',
++      oil: 1,
++      gas: 3,
++      water: 1,
++    },
++  ];
++}
++
++function groundOwnership() {
++  return [
++    { property: 'W1', owner: 'A', decimal: 0.75, payStatus: 'pay' },
++    { property: 'W1', owner: 'B', decimal: 0.25, payStatus: 'hold' },
++    { property: 'W2', owner: 'A', decimal: 0.5, payStatus: 'pay' },
++    { property: 'W2', owner: 'C', decimal: 0.5, payStatus: 'pay' },
++  ];
++}
++
++function groundMeasurements() {
++  return api.collectCloseMeasurements(MONTH, groundTicketPayload());
++}
++
++function groundAllocations() {
++  return api.allocateCloseVolumes(MONTH, groundMeasurements(), groundTheoreticals());
++}
++
++test('close measurements convert oil, wet gas, and hauled water into controls', () => {
++  const result = api.collectCloseMeasurements(MONTH, groundTicketPayload());
++
++  assert.equal(result.ok, true);
++  assert.equal(result.month, MONTH);
++  assert.deepEqual(result.errors, []);
++  assert.deepEqual(result.totals, {
++    oilBbl: 98,
++    gasMcf: 90,
++    gasMmbtu: 99,
++    waterBbl: 30,
++  });
++  assert.deepEqual(result.lines, [
++    {
++      id: 'O-1',
++      product: 'oil',
++      battery: 'BAT-1',
++      occurredOn: '2024-02-10',
++      oilBbl: 98,
++      gasMcf: 0,
++      gasMmbtu: 0,
++      waterBbl: 0,
++    },
++    {
++      id: 'G-1',
++      product: 'gas',
++      battery: 'BAT-1',
++      occurredOn: '2024-02-29',
++      oilBbl: 0,
++      gasMcf: 90,
++      gasMmbtu: 99,
++      waterBbl: 0,
++    },
++    {
++      id: 'H-1',
++      product: 'water',
++      battery: 'BAT-1',
++      occurredOn: '2024-02-15',
++      oilBbl: 0,
++      gasMcf: 0,
++      gasMmbtu: 0,
++      waterBbl: 30,
++    },
++  ]);
++  assert.deepEqual(result.controls, [{
++    battery: 'BAT-1',
++    ticketCount: 3,
++    oilTickets: 1,
++    gasTickets: 1,
++    waterTickets: 1,
++    oilBbl: 98,
++    gasMcf: 90,
++    gasMmbtu: 99,
++    waterBbl: 30,
++  }]);
++});
++
++test('close measurements honor leap-month boundaries and ignore neighboring months', () => {
++  const result = api.collectCloseMeasurements(MONTH, {
++    oilTickets: [
++      oilTicket({ id: 'JAN', gaugeDate: '2024-01-31', gross: 10 }),
++      oilTicket({ id: 'FIRST', gaugeDate: '2024-02-01', gross: 20, bswPct: 0 }),
++      oilTicket({ id: 'LAST', gaugeDate: '2024-02-29', gross: 30, bswPct: 0 }),
++      oilTicket({ id: 'MAR', gaugeDate: '2024-03-01', gross: 40 }),
++    ],
++  });
++
++  assert.equal(result.ok, true);
++  assert.equal(result.month, '2024-02');
++  assert.deepEqual(result.lines.map((line) => line.id), ['FIRST', 'LAST']);
++  assert.deepEqual(result.lines.map((line) => line.occurredOn), [
++    '2024-02-01',
++    '2024-02-29',
++  ]);
++  assert.equal(result.controls[0].ticketCount, 2);
++  assert.equal(result.controls[0].oilTickets, 2);
++  assert.equal(result.totals.oilBbl, 50);
++});
++
++test('close measurements canonicalize a day input and accept collection aliases', () => {
++  const result = api.collectCloseMeasurements('2024-02-18', {
++    oil: [oilTicket()],
++    gas: [gasTicket()],
++    water: [waterTicket()],
++  });
++
++  assert.equal(result.ok, true);
++  assert.equal(result.month, MONTH);
++  assert.equal(result.lines.length, 3);
++  assert.deepEqual(result.lines.map((line) => line.product), [
++    'oil',
++    'gas',
++    'water',
++  ]);
++  assert.deepEqual(result.totals, {
++    oilBbl: 98,
++    gasMcf: 90,
++    gasMmbtu: 99,
++    waterBbl: 30,
++  });
++});
++
++test('close measurements resolve product-specific battery fallbacks', () => {
++  const oil = oilTicket({ battery: undefined, tank: 'TANK-9', well: 'OW-1' });
++  const gas = gasTicket({ battery: undefined, station: 'ST-2', meter: 'MTR-2' });
++  const water = waterTicket({ battery: undefined, disposal: 'DISP-4', fromWell: 'WW-4' });
++  const result = api.collectCloseMeasurements(MONTH, {
++    oilTickets: [oil],
++    gasTickets: [gas],
++    waterTickets: [water],
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => [line.product, line.battery]), [
++    ['water', 'DISP-4'],
++    ['gas', 'ST-2'],
++    ['oil', 'TANK-9'],
++  ]);
++  assert.deepEqual(result.controls.map((control) => control.battery), [
++    'DISP-4',
++    'ST-2',
++    'TANK-9',
++  ]);
++});
++
++test('close measurements subtract water receipts from hauled production', () => {
++  const result = api.collectCloseMeasurements(MONTH, {
++    waterTickets: [
++      waterTicket({ id: 'OUT', bbl: 30, direction: 'out' }),
++      waterTicket({ id: 'IN', bbl: 5, direction: 'receipt' }),
++      waterTicket({ id: 'IN-ALIAS', bbl: 2, direction: 'in' }),
++    ],
++  });
++
++  assert.equal(result.ok, true);
++  assert.equal(result.totals.waterBbl, 23);
++  assert.deepEqual(
++    Object.fromEntries(result.lines.map((line) => [line.id, line.waterBbl])),
++    { 'IN': -5, 'IN-ALIAS': -2, 'OUT': 30 },
++  );
++  assert.equal(result.controls[0].waterTickets, 3);
++  assert.equal(result.controls[0].ticketCount, 3);
++});
++
++test('close measurements scope duplicate detection by product and target month', () => {
++  const result = api.collectCloseMeasurements(MONTH, {
++    oilTickets: [
++      oilTicket({ id: 'SHARED' }),
++      oilTicket({ id: 'OLD', gaugeDate: '2024-01-10' }),
++      oilTicket({ id: 'OLD', gaugeDate: '2024-01-11' }),
++    ],
++    gasTickets: [gasTicket({ id: 'SHARED' })],
++    waterTickets: [waterTicket({ id: 'SHARED' })],
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.errors, []);
++  assert.deepEqual(result.lines.map((line) => `${line.product}:${line.id}`), [
++    'oil:SHARED',
++    'gas:SHARED',
++    'water:SHARED',
++  ]);
++
++  const duplicate = api.collectCloseMeasurements(MONTH, {
++    oilTickets: [oilTicket({ id: 'DUP' }), oilTicket({ id: 'DUP', gross: 25 })],
++  });
++  assert.equal(duplicate.ok, false);
++  assert.deepEqual(duplicate.errors, ['duplicate_ticket:oil:DUP']);
++  assert.deepEqual(duplicate.lines, []);
++  assert.equal(duplicate.totals.oilBbl, 0);
++});
++
++test('close measurements return stable top-level validation errors', () => {
++  const invalidMonth = api.collectCloseMeasurements('2024-13', {});
++  assert.equal(invalidMonth.ok, false);
++  assert.equal(invalidMonth.month, '');
++  assert.deepEqual(invalidMonth.errors, ['invalid_month']);
++  assert.deepEqual(invalidMonth.lines, []);
++  assert.deepEqual(invalidMonth.totals, {
++    oilBbl: 0,
++    gasMcf: 0,
++    gasMmbtu: 0,
++    waterBbl: 0,
++  });
++
++  const invalidPayload = api.collectCloseMeasurements(MONTH, 'tickets');
++  assert.equal(invalidPayload.ok, false);
++  assert.deepEqual(invalidPayload.errors, ['invalid_payload']);
++
++  const invalidCollections = api.collectCloseMeasurements(MONTH, {
++    oil: {},
++    gasTickets: 'bad',
++    water: 7,
++  });
++  assert.equal(invalidCollections.ok, false);
++  assert.deepEqual(invalidCollections.errors, [
++    'invalid_collection:gasTickets',
++    'invalid_collection:oil',
++    'invalid_collection:water',
++  ]);
++});
++
++test('close measurements retain valid rows while reporting bad tickets and locations', () => {
++  const result = api.collectCloseMeasurements(MONTH, {
++    oilTickets: [
++      oilTicket({ id: 'GOOD' }),
++      oilTicket({ id: 'NEG', gross: -1 }),
++      oilTicket({ id: 'NO-BAT', battery: '', tank: '', well: '' }),
++      oilTicket({ id: 'NO-DATE', gaugeDate: '', received: '' }),
++    ],
++    gasTickets: [gasTicket({ id: 'BAD-GAS', mcf: Number.NaN })],
++    waterTickets: [waterTicket({ id: 'BAD-WATER', bbl: -4 })],
++  });
++
++  assert.equal(result.ok, false);
++  assert.deepEqual(result.lines.map((line) => line.id), ['GOOD']);
++  assert.deepEqual(result.errors, [
++    'invalid_ticket:gas:BAD-GAS',
++    'invalid_ticket:oil:NEG',
++    'invalid_ticket:oil:NO-DATE',
++    'invalid_ticket:water:BAD-WATER',
++    'missing_battery:oil:NO-BAT',
++  ]);
++  assert.equal(result.controls.length, 1);
++  assert.equal(result.controls[0].oilBbl, 98);
++});
++
++test('close measurements sort batteries, products, and identifiers deterministically', () => {
++  const result = api.collectCloseMeasurements(MONTH, {
++    oilTickets: [
++      oilTicket({ id: 'O-Z', battery: 'BAT-Z' }),
++      oilTicket({ id: 'O-B', battery: 'BAT-A' }),
++      oilTicket({ id: 'O-A', battery: 'BAT-A' }),
++    ],
++    gasTickets: [gasTicket({ id: 'G-A', battery: 'BAT-A' })],
++    waterTickets: [waterTicket({ id: 'H-A', battery: 'BAT-A' })],
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => line.id), [
++    'O-A',
++    'O-B',
++    'G-A',
++    'H-A',
++    'O-Z',
++  ]);
++  assert.deepEqual(result.controls.map((control) => control.battery), [
++    'BAT-A',
++    'BAT-Z',
++  ]);
++  assert.deepEqual(result.controls.map((control) => control.ticketCount), [4, 1]);
++});
++
++test('close measurements do not mutate ticket payloads', () => {
++  const payload = groundTicketPayload();
++  const before = structuredClone(payload);
++  const first = api.collectCloseMeasurements(MONTH, payload);
++  const second = api.collectCloseMeasurements(MONTH, payload);
++
++  assert.equal(first.ok, true);
++  assert.deepEqual(payload, before);
++  assert.deepEqual(second, first);
++  assert.notEqual(first.lines, second.lines);
++  assert.notEqual(first.controls, second.controls);
++});
++
++test('close allocation applies independent well factors and balances controls', () => {
++  const measured = groundMeasurements();
++  const result = api.allocateCloseVolumes(MONTH, measured, groundTheoreticals());
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.errors, []);
++  assert.deepEqual(result.totals, measured.totals);
++  assert.deepEqual(result.lines, [
++    {
++      id: '2024-02:BAT-1:W1',
++      month: MONTH,
++      battery: 'BAT-1',
++      well: 'W1',
++      oilFactor: 3,
++      gasFactor: 1,
++      waterFactor: 2,
++      oilBbl: 73.5,
++      gasMcf: 22.5,
++      gasMmbtu: 24.75,
++      waterBbl: 20,
++    },
++    {
++      id: '2024-02:BAT-1:W2',
++      month: MONTH,
++      battery: 'BAT-1',
++      well: 'W2',
++      oilFactor: 1,
++      gasFactor: 3,
++      waterFactor: 1,
++      oilBbl: 24.5,
++      gasMcf: 67.5,
++      gasMmbtu: 74.25,
++      waterBbl: 10,
++    },
++  ]);
++  assert.deepEqual(result.controls[0], {
++    battery: 'BAT-1',
++    measured: measured.totals,
++    allocated: measured.totals,
++    residual: { oilBbl: 0, gasMcf: 0, gasMmbtu: 0, waterBbl: 0 },
++  });
++});
++
++test('close allocation uses gas factors for both volume and energy', () => {
++  const result = api.allocateCloseVolumes(MONTH, [{
++    battery: 'B',
++    gasMcf: 40,
++    gasMmbtu: 100,
++  }], [
++    { id: 'TX', well: 'X', battery: 'B', monthOn: '2024-02-01', gas: 1 },
++    { id: 'TY', well: 'Y', battery: 'B', monthOn: '2024-02-01', gas: 4 },
++  ]);
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => ({
++    well: line.well,
++    gasFactor: line.gasFactor,
++    gasMcf: line.gasMcf,
++    gasMmbtu: line.gasMmbtu,
++  })), [
++    { well: 'X', gasFactor: 1, gasMcf: 8, gasMmbtu: 20 },
++    { well: 'Y', gasFactor: 4, gasMcf: 32, gasMmbtu: 80 },
++  ]);
++  assert.equal(result.controls[0].residual.gasMcf, 0);
++  assert.equal(result.controls[0].residual.gasMmbtu, 0);
++});
++
++test('close allocation assigns displayed rounding residue to the final sorted well', () => {
++  const result = api.allocateCloseVolumes(MONTH, [{
++    battery: 'B',
++    oilBbl: 1,
++    gasMcf: 1,
++    gasMmbtu: 1,
++    waterBbl: 1,
++  }], [
++    { id: 'TZ', well: 'Z', battery: 'B', monthOn: '2024-02-01', oil: 1, gas: 1, water: 1 },
++    { id: 'TA', well: 'A', battery: 'B', monthOn: '2024-02-01', oil: 1, gas: 1, water: 1 },
++    { id: 'TM', well: 'M', battery: 'B', monthOn: '2024-02-01', oil: 1, gas: 1, water: 1 },
++  ]);
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => line.well), ['A', 'M', 'Z']);
++  for (const key of ['oilBbl', 'gasMcf', 'gasMmbtu', 'waterBbl']) {
++    assert.deepEqual(result.lines.map((line) => line[key]), [0.3333, 0.3333, 0.3334]);
++    assert.equal(result.totals[key], 1);
++    assert.equal(result.controls[0].residual[key], 0);
++  }
++});
++
++test('close allocation accepts measurement lines and groups them by battery', () => {
++  const measurements = {
++    lines: [
++      { id: '1', battery: 'B', oilBbl: 2, gasMcf: 3, gasMmbtu: 4 },
++      { id: '2', battery: 'B', oilBbl: 5, gasMcf: 7, gasMmbtu: 8 },
++      { id: '3', battery: 'C', waterBbl: 9 },
++    ],
++  };
++  const result = api.allocateCloseVolumes(MONTH, measurements, [
++    { id: 'TB', well: 'WB', battery: 'B', monthOn: '2024-02-01', oil: 1, gas: 1 },
++    { id: 'TC', well: 'WC', battery: 'C', monthOn: '2024-02-01', water: 1 },
++  ]);
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => line.well), ['WB', 'WC']);
++  assert.deepEqual(result.totals, {
++    oilBbl: 7,
++    gasMcf: 10,
++    gasMmbtu: 12,
++    waterBbl: 9,
++  });
++  assert.deepEqual(result.controls.map((control) => control.measured), [
++    { oilBbl: 7, gasMcf: 10, gasMmbtu: 12, waterBbl: 0 },
++    { oilBbl: 0, gasMcf: 0, gasMmbtu: 0, waterBbl: 9 },
++  ]);
++});
++
++test('close allocation merges duplicate controls and reads nested totals', () => {
++  const controls = [
++    { battery: 'B', totals: { oilBbl: 2, gasMcf: 4, gasMmbtu: 5 } },
++    { battery: 'B', totals: { oilBbl: 3, gasMcf: 6, gasMmbtu: 7, waterBbl: -2 } },
++  ];
++  const result = api.allocateCloseVolumes(MONTH, controls, [
++    { id: 'T', well: 'W', battery: 'B', monthOn: '2024-02-01', oil: 1, gas: 1, water: 1 },
++  ]);
++
++  assert.equal(result.ok, true);
++  assert.equal(result.controls.length, 1);
++  assert.deepEqual(result.controls[0].measured, {
++    oilBbl: 5,
++    gasMcf: 10,
++    gasMmbtu: 12,
++    waterBbl: -2,
++  });
++  assert.deepEqual(result.lines[0], {
++    id: '2024-02:B:W',
++    month: MONTH,
++    battery: 'B',
++    well: 'W',
++    oilFactor: 1,
++    gasFactor: 1,
++    waterFactor: 1,
++    oilBbl: 5,
++    gasMcf: 10,
++    gasMmbtu: 12,
++    waterBbl: -2,
++  });
++});
++
++test('close allocation flattens theoretical wrappers and falls back from well to id', () => {
++  const result = api.allocateCloseVolumes(MONTH, [{ battery: 'B', oilBbl: 12 }], {
++    rows: [
++      { id: 'W-A', battery: 'B', monthOn: '2024-02-01', oil: 1 },
++      { id: 'T-B', well: 'W-B', battery: 'B', monthOn: '2024-02-01', oil: 2 },
++    ],
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => line.well), ['W-A', 'W-B']);
++  assert.deepEqual(result.lines.map((line) => line.oilBbl), [4, 8]);
++  assert.deepEqual(result.lines.map((line) => line.oilFactor), [1, 2]);
++  assert.deepEqual(result.controls[0].residual, {
++    oilBbl: 0,
++    gasMcf: 0,
++    gasMmbtu: 0,
++    waterBbl: 0,
++  });
++});
++
++test('close allocation ignores other months and merges duplicate well factors', () => {
++  const theoreticals = [
++    { id: 'OLD', well: 'OLD', battery: 'B', monthOn: '2024-01-01', oil: 100 },
++    { id: 'A1', well: 'A', battery: 'B', monthOn: '2024-02-01', oil: 1 },
++    { id: 'A2', well: 'A', battery: 'B', monthOn: '2024-02-29', oil: 2 },
++    { id: 'Z', well: 'Z', battery: 'B', monthOn: '2024-02-10', oil: 3 },
++    { id: 'ZERO', well: 'N', battery: 'B', monthOn: '2024-02-01', oil: 0 },
++  ];
++  const result = api.allocateCloseVolumes(MONTH, [{ battery: 'B', oilBbl: 60 }], theoreticals);
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => line.well), ['A', 'Z']);
++  assert.deepEqual(result.lines.map((line) => line.oilFactor), [3, 3]);
++  assert.deepEqual(result.lines.map((line) => line.oilBbl), [30, 30]);
++  assert.equal(result.totals.oilBbl, 60);
++});
++
++test('close allocation reports missing participants independently by product', () => {
++  const result = api.allocateCloseVolumes(MONTH, [{
++    battery: 'B',
++    oilBbl: 10,
++    gasMcf: 20,
++    gasMmbtu: 25,
++    waterBbl: 30,
++  }], [
++    { id: 'T', well: 'W', battery: 'B', monthOn: '2024-02-01', gas: 2 },
++  ]);
++
++  assert.equal(result.ok, false);
++  assert.deepEqual(result.errors, [
++    'no_participants:B:oil',
++    'no_participants:B:water',
++  ]);
++  assert.equal(result.lines.length, 1);
++  assert.equal(result.lines[0].oilBbl, 0);
++  assert.equal(result.lines[0].gasMcf, 20);
++  assert.equal(result.lines[0].gasMmbtu, 25);
++  assert.equal(result.lines[0].waterBbl, 0);
++  assert.deepEqual(result.controls[0].residual, {
++    oilBbl: 10,
++    gasMcf: 0,
++    gasMmbtu: 0,
++    waterBbl: 30,
++  });
++});
++
++test('close allocation rejects bad upstream and control inputs atomically', () => {
++  const mismatch = api.allocateCloseVolumes(MONTH, {
++    ok: true,
++    month: '2024-03',
++    controls: [],
++  }, []);
++  assert.equal(mismatch.ok, false);
++  assert.deepEqual(mismatch.errors, ['measurement_month_mismatch']);
++  assert.deepEqual(mismatch.lines, []);
++
++  const upstream = api.allocateCloseVolumes(MONTH, {
++    ok: false,
++    month: MONTH,
++    controls: [{ battery: 'B', oilBbl: 10 }],
++    errors: ['bad_source'],
++  }, groundTheoreticals());
++  assert.equal(upstream.ok, false);
++  assert.deepEqual(upstream.errors, ['bad_source']);
++  assert.deepEqual(upstream.lines, []);
++
++  const malformed = api.allocateCloseVolumes(MONTH, [
++    { battery: 'B', oilBbl: -1 },
++    { battery: '', gasMcf: 2 },
++    null,
++  ], []);
++  assert.equal(malformed.ok, false);
++  assert.deepEqual(malformed.errors, [
++    'invalid_measurement_control:0',
++    'invalid_measurement_control:1',
++    'invalid_measurement_control:2',
++  ]);
++  assert.deepEqual(malformed.lines, []);
++
++  assert.deepEqual(api.allocateCloseVolumes('bad', [], []).errors, ['invalid_month']);
++});
++
++test('close allocation supports an empty close and preserves every input', () => {
++  const controls = [];
++  const theoreticals = groundTheoreticals();
++  const before = structuredClone(theoreticals);
++  const result = api.allocateCloseVolumes(MONTH, controls, theoreticals);
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines, []);
++  assert.deepEqual(result.controls, []);
++  assert.deepEqual(result.errors, []);
++  assert.deepEqual(result.totals, {
++    oilBbl: 0,
++    gasMcf: 0,
++    gasMmbtu: 0,
++    waterBbl: 0,
++  });
++  assert.deepEqual(theoreticals, before);
++  assert.deepEqual(controls, []);
++});
++
++test('close settlement values the ground allocation and conserves all money', () => {
++  const result = api.settleCloseOwners(
++    MONTH,
++    groundAllocations(),
++    groundOwnership(),
++    { oil: 70, gas: 3 },
++    { oil: 0.05, gas: 0.1 },
++  );
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.errors, []);
++  assert.equal(result.lines.length, 8);
++  assert.deepEqual(result.totals, {
++    gross: 7157,
++    tax: 372.7,
++    net: 6784.3,
++    payable: 5545.656,
++    suspense: 1238.644,
++  });
++  assert.equal(result.payableLines.length, 6);
++  assert.equal(result.suspenseLines.length, 2);
++  assert.deepEqual(result.owners, [
++    { owner: 'A', gross: 4883.313, tax: 252.52, net: 4630.793, payable: 4630.793, suspense: 0 },
++    { owner: 'B', gross: 1304.812, tax: 66.168, net: 1238.644, payable: 0, suspense: 1238.644 },
++    { owner: 'C', gross: 968.875, tax: 54.012, net: 914.863, payable: 914.863, suspense: 0 },
++  ]);
++});
++
++test('close settlement merges duplicate DOI owners and honors owner identifier precedence', () => {
++  const allocation = [{ well: 'W', oilBbl: 10 }];
++  const ownership = {
++    rows: [
++      { property: 'W', id: 'A', owner: 'IGNORED', decimal: 0.3 },
++      { property: 'W', owner: 'A', decimal: 0.3 },
++      { property: 'W', ownerId: 'B', decimal: 0.4 },
++      { property: 'OTHER', owner: 'Z', decimal: 1 },
++    ],
++  };
++  const result = api.settleCloseOwners(MONTH, allocation, ownership, { oil: 80 });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => line.owner), ['A', 'B']);
++  assert.deepEqual(result.lines.map((line) => line.decimal), [0.6, 0.4]);
++  assert.deepEqual(result.lines.map((line) => line.volume), [6, 4]);
++  assert.deepEqual(result.lines.map((line) => line.gross), [480, 320]);
++  assert.deepEqual(result.totals, {
++    gross: 800,
++    tax: 0,
++    net: 800,
++    payable: 800,
++    suspense: 0,
++  });
++});
++
++test('close settlement routes any merged hold status into suspense', () => {
++  const result = api.settleCloseOwners(MONTH, [{ well: 'W', oilBbl: 10 }], [
++    { property: 'W', owner: 'A', decimal: 0.25, payStatus: 'pay' },
++    { property: 'W', owner: 'A', decimal: 0.25, payStatus: 'legal hold' },
++    { property: 'W', owner: 'B', decimal: 0.5, payStatus: 'PAY' },
++  ], { oil: 10 }, { oil: 0.1 });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => [line.owner, line.status]), [
++    ['A', 'hold'],
++    ['B', 'pay'],
++  ]);
++  assert.deepEqual(result.suspenseLines.map((line) => line.owner), ['A']);
++  assert.deepEqual(result.payableLines.map((line) => line.owner), ['B']);
++  assert.equal(result.owners[0].payable, 0);
++  assert.equal(result.owners[0].suspense, 45);
++  assert.equal(result.owners[1].payable, 45);
++  assert.equal(result.owners[1].suspense, 0);
++});
++
++test('close settlement gives volume and money rounding residue to the final owner', () => {
++  const result = api.settleCloseOwners(MONTH, [{ well: 'W', oilBbl: 1 }], [
++    { property: 'W', owner: 'A', decimal: 1 / 3 },
++    { property: 'W', owner: 'B', decimal: 1 / 3 },
++    { property: 'W', owner: 'C', decimal: 1 / 3 },
++  ], { oil: 1 }, { oil: 0.1 });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => line.volume), [0.3333, 0.3333, 0.3334]);
++  assert.deepEqual(result.lines.map((line) => line.gross), [0.333, 0.333, 0.334]);
++  assert.deepEqual(result.lines.map((line) => line.tax), [0.033, 0.033, 0.034]);
++  assert.deepEqual(result.lines.map((line) => line.net), [0.3, 0.3, 0.3]);
++  assert.deepEqual(result.totals, {
++    gross: 1,
++    tax: 0.1,
++    net: 0.9,
++    payable: 0.9,
++    suspense: 0,
++  });
++
++  const tiny = api.settleCloseOwners(MONTH, [{ well: 'MICRO', oilBbl: 0.0002 }], [
++    { property: 'MICRO', owner: 'A', decimal: 0.26 },
++    { property: 'MICRO', owner: 'B', decimal: 0.26 },
++    { property: 'MICRO', owner: 'C', decimal: 0.26 },
++    { property: 'MICRO', owner: 'D', decimal: 0.22 },
++  ], { oil: 10 });
++  assert.equal(tiny.ok, true);
++  assert.deepEqual(tiny.lines.map((line) => line.volume), [0.0001, 0.0001, 0, 0]);
++  assert.deepEqual(tiny.lines.map((line) => line.gross), [0.001, 0.001, 0, 0]);
++  assert.ok(tiny.lines.every((line) => line.volume >= 0));
++  assert.ok(tiny.lines.every((line) => line.gross >= 0));
++  assert.ok(tiny.lines.every((line) => line.net >= 0));
++  assert.equal(tiny.lines.reduce((sum, line) => sum + line.volume, 0), 0.0002);
++  assert.equal(tiny.totals.gross, 0.002);
++});
++
++test('close settlement ignores water and gas volume when valuing gas energy', () => {
++  const result = api.settleCloseOwners(MONTH, {
++    lines: [
++      { well: 'W', gasMcf: 999, gasMmbtu: 5, waterBbl: 500 },
++      { well: 'W', gasMcf: 1, gasMmbtu: 7, waterBbl: -20 },
++    ],
++  }, [{ property: 'W', owner: 'A', decimal: 1 }], { gas: 2 });
++
++  assert.equal(result.ok, true);
++  assert.equal(result.lines.length, 1);
++  assert.equal(result.lines[0].product, 'gas');
++  assert.equal(result.lines[0].volume, 12);
++  assert.equal(result.lines[0].gross, 24);
++  assert.equal(result.totals.net, 24);
++
++  const waterOnly = api.settleCloseOwners(MONTH, [{ well: 'W', waterBbl: 9 }], [], {}, {});
++  assert.equal(waterOnly.ok, true);
++  assert.deepEqual(waterOnly.lines, []);
++  assert.deepEqual(waterOnly.totals, { gross: 0, tax: 0, net: 0, payable: 0, suspense: 0 });
++});
++
++test('close settlement requires prices only for active products and permits zero', () => {
++  const oilOnly = api.settleCloseOwners(MONTH, [{ well: 'W', oilBbl: 3 }], [
++    { property: 'W', owner: 'A', decimal: 1 },
++  ], { oil: 0 });
++
++  assert.equal(oilOnly.ok, true);
++  assert.equal(oilOnly.lines.length, 1);
++  assert.equal(oilOnly.lines[0].price, 0);
++  assert.equal(oilOnly.lines[0].net, 0);
++  assert.deepEqual(oilOnly.errors, []);
++
++  const gasOnly = api.settleCloseOwners(MONTH, [{ well: 'W', gasMmbtu: 2 }], [
++    { property: 'W', owner: 'A', decimal: 1 },
++  ], { gas: 4 });
++  assert.equal(gasOnly.ok, true);
++  assert.equal(gasOnly.lines[0].product, 'gas');
++  assert.equal(gasOnly.lines[0].gross, 8);
++});
++
++test('close settlement reports invalid prices and rates with valid partial products', () => {
++  const allocation = [{ well: 'W', oilBbl: 10, gasMmbtu: 5 }];
++  const ownership = [{ property: 'W', owner: 'A', decimal: 1 }];
++  const result = api.settleCloseOwners(MONTH, allocation, ownership, {
++    oil: -1,
++    gas: 2,
++  }, {
++    oil: 0.05,
++    gas: 1.1,
++  });
++
++  assert.equal(result.ok, false);
++  assert.deepEqual(result.errors, ['invalid_price:oil', 'invalid_tax_rate:gas']);
++  assert.deepEqual(result.lines, []);
++
++  const inactiveRate = api.settleCloseOwners(MONTH, [{ well: 'W', oilBbl: 10 }], ownership, {
++    oil: 2,
++  }, {
++    gas: -0.1,
++  });
++  assert.equal(inactiveRate.ok, true);
++  assert.deepEqual(inactiveRate.errors, []);
++  assert.equal(inactiveRate.lines.length, 1);
++  assert.equal(inactiveRate.lines[0].gross, 20);
++
++  const malformed = api.settleCloseOwners(MONTH, [{
++    well: 'W',
++    oilBbl: 'not-a-number',
++  }], ownership, { oil: 2 });
++  assert.equal(malformed.ok, false);
++  assert.deepEqual(malformed.errors, ['invalid_allocation:0']);
++  assert.deepEqual(malformed.lines, []);
++});
++
++test('close settlement distinguishes missing, unbalanced, and harmless DOI drift', () => {
++  const allocation = [{ well: 'W', oilBbl: 10 }];
++  const missing = api.settleCloseOwners(MONTH, allocation, [], { oil: 1 });
++  assert.equal(missing.ok, false);
++  assert.deepEqual(missing.errors, ['missing_doi:W']);
++  assert.deepEqual(missing.lines, []);
++
++  const unbalanced = api.settleCloseOwners(MONTH, allocation, [
++    { property: 'W', owner: 'A', decimal: 0.9 },
++  ], { oil: 1 });
++  assert.equal(unbalanced.ok, false);
++  assert.deepEqual(unbalanced.errors, ['unbalanced_doi:W']);
++
++  const drift = api.settleCloseOwners(MONTH, allocation, [
++    { property: 'W', owner: 'A', decimal: 0.500000002 },
++    { property: 'W', owner: 'B', decimal: 0.500000002 },
++  ], { oil: 1 });
++  assert.equal(drift.ok, true);
++  assert.deepEqual(drift.lines.map((line) => line.decimal), [0.5, 0.5]);
++  assert.equal(drift.lines.reduce((sum, line) => sum + line.volume, 0), 10);
++});
++
++test('close settlement sorts output and leaves allocations, DOI, and configs unchanged', () => {
++  const allocations = [
++    { well: 'Z', gasMmbtu: 2, oilBbl: 1 },
++    { well: 'A', gasMmbtu: 3, oilBbl: 4 },
++  ];
++  const ownership = [
++    { property: 'Z', owner: 'Y', decimal: 0.5 },
++    { property: 'Z', owner: 'X', decimal: 0.5 },
++    { property: 'A', owner: 'B', decimal: 0.5 },
++    { property: 'A', owner: 'A', decimal: 0.5 },
++  ];
++  const prices = { oil: 10, gas: 2 };
++  const rates = { oil: 0.05, gas: 0.1 };
++  const before = structuredClone({ allocations, ownership, prices, rates });
++  const result = api.settleCloseOwners(MONTH, allocations, ownership, prices, rates);
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => `${line.well}:${line.product}:${line.owner}`), [
++    'A:oil:A',
++    'A:oil:B',
++    'A:gas:A',
++    'A:gas:B',
++    'Z:oil:X',
++    'Z:oil:Y',
++    'Z:gas:X',
++    'Z:gas:Y',
++  ]);
++  assert.deepEqual({ allocations, ownership, prices, rates }, before);
++  assert.deepEqual(result.owners.map((owner) => owner.owner), ['A', 'B', 'X', 'Y']);
++  assert.deepEqual(api.settleCloseOwners('not-a-month', [], [], {}).errors, ['invalid_month']);
++});
++
++test('close measurements apply temperature correction away from sixty degrees', () => {
++  const result = api.collectCloseMeasurements(MONTH, {
++    oilTickets: [
++      oilTicket({ id: 'COLD', gross: 100, bswPct: 0, tempF: 40 }),
++      oilTicket({ id: 'WARM', gross: 100, bswPct: 0, tempF: 80 }),
++    ],
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(
++    Object.fromEntries(result.lines.map((line) => [line.id, line.oilBbl])),
++    { COLD: 100.999, WARM: 98.995 },
++  );
++  assert.equal(result.totals.oilBbl, 199.994);
++});
++
++test('close measurements round equal water movements symmetrically', () => {
++  const result = api.collectCloseMeasurements(MONTH, {
++    waterTickets: [
++      waterTicket({ id: 'OUT-TINY', bbl: 0.00005, direction: 'OUT' }),
++      waterTicket({ id: 'IN-TINY', bbl: 0.00005, direction: 'receipt' }),
++    ],
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.lines.map((line) => line.waterBbl), [-0.0001, 0.0001]);
++  assert.equal(result.totals.waterBbl, 0);
++});
++
++test('close measurements normalize gas mode and reject malformed gas intervals', () => {
++  const result = api.collectCloseMeasurements(MONTH, {
++    gasTickets: [
++      gasTicket({ id: 'DRY', wetDry: '  DRY  ', co2Pct: 10, n2Pct: 10, btu: 1000 }),
++      gasTicket({ id: 'BAD-MODE', wetDry: 'banana' }),
++      gasTicket({ id: 'REVERSED', startOn: '2024-02-29', endOn: '2024-02-01' }),
++    ],
++  });
++
++  assert.equal(result.ok, false);
++  assert.deepEqual(result.errors, [
++    'invalid_ticket:gas:BAD-MODE',
++    'invalid_ticket:gas:REVERSED',
++  ]);
++  assert.deepEqual(result.lines.map((line) => [line.id, line.gasMcf, line.gasMmbtu]), [
++    ['DRY', 100, 100],
++  ]);
++});
++
++test('close allocation combines sub-display duplicate factors and keeps component ids unique', () => {
++  const measurements = {
++    controls: [
++      { battery: 'B', oilBbl: 1 },
++      { battery: 'X:Y', oilBbl: 2 },
++      { battery: 'X', oilBbl: 3 },
++    ],
++  };
++  const theoreticals = [
++    { id: 'B1', well: 'W', battery: 'B', monthOn: '2024-02-01', oil: 0.000000004 },
++    { id: 'B2', well: 'W', battery: 'B', monthOn: '2024-02-01', oil: 0.000000004 },
++    { id: 'B3', well: 'W', battery: 'B', monthOn: '2024-02-01', oil: 0.000000004 },
++    { id: 'C1', well: 'Z', battery: 'X:Y', monthOn: '2024-02-01', oil: 1 },
++    { id: 'C2', well: 'Y:Z', battery: 'X', monthOn: '2024-02-01', oil: 1 },
++  ];
++  const result = api.allocateCloseVolumes(MONTH, measurements, theoreticals);
++
++  assert.equal(result.ok, true);
++  assert.equal(result.lines.find((line) => line.battery === 'B').oilFactor, 0.00000001);
++  assert.equal(new Set(result.lines.map((line) => line.id)).size, 3);
++  assert.ok(result.lines.some((line) => line.id === '2024-02:X%003AY:Z'));
++  assert.ok(result.lines.some((line) => line.id === '2024-02:X:Y%003AZ'));
++  assert.equal(result.totals.oilBbl, 6);
++});
++
++test('close settlement publishes the price used and caps penny-level owner tax', () => {
++  const oneOwner = [{ property: 'W', owner: 'A', decimal: 1 }];
++  const lower = api.settleCloseOwners(MONTH, [{ well: 'W', oilBbl: 1 }], oneOwner, {
++    oil: 1.0004999,
++  });
++  const upper = api.settleCloseOwners(MONTH, [{ well: 'W', oilBbl: 1 }], oneOwner, {
++    oil: 1.0005001,
++  });
++  assert.equal(lower.lines[0].price, 1.0005);
++  assert.equal(upper.lines[0].price, 1.0005);
++  assert.equal(lower.lines[0].gross, upper.lines[0].gross);
++
++  const thirds = ['A', 'B', 'C'].map((owner) => ({
++    property: 'W', owner, decimal: 1 / 3,
++  }));
++  const tiny = api.settleCloseOwners(
++    MONTH,
++    [{ well: 'W', oilBbl: 1 }],
++    thirds,
++    { oil: 0.002 },
++    { oil: 0.5 },
++  );
++  assert.equal(tiny.ok, true);
++  assert.ok(tiny.lines.every((line) => line.tax >= 0 && line.tax <= line.gross));
++  assert.equal(tiny.lines.reduce((sum, line) => sum + line.gross, 0), 0.002);
++  assert.equal(tiny.lines.reduce((sum, line) => sum + line.tax, 0), 0.001);
++  assert.ok(tiny.lines.every((line) => line.net >= 0));
++});
+diff --git a/test/close/monthClose.test.js b/test/close/monthClose.test.js
+new file mode 100644
+index 0000000..46ac39c
+--- /dev/null
++++ b/test/close/monthClose.test.js
+@@ -0,0 +1,678 @@
++import assert from 'node:assert/strict';
++import { test } from 'node:test';
++import * as api from '../../src/index.js';
++
++const MONTH = '2024-02';
++
++function closeRequest(overrides = {}) {
++  return {
++    month: MONTH,
++    actor: 'closer',
++    oilTickets: [{
++      id: 'O-1',
++      battery: 'BAT-1',
++      gaugeDate: '2024-02-10',
++      gross: 100,
++      bswPct: 2,
++      api: 40,
++      tempF: 60,
++    }],
++    gasTickets: [{
++      id: 'G-1',
++      battery: 'BAT-1',
++      startOn: '2024-02-01',
++      endOn: '2024-02-29',
++      mcf: 100,
++      btu: 1100,
++      co2Pct: 5,
++      n2Pct: 5,
++      wetDry: 'wet',
++    }],
++    waterTickets: [{
++      id: 'H-1',
++      battery: 'BAT-1',
++      hauledOn: '2024-02-15',
++      bbl: 30,
++      direction: 'out',
++    }],
++    theoreticals: [
++      {
++        id: 'T-W1',
++        well: 'W1',
++        battery: 'BAT-1',
++        monthOn: '2024-02-01',
++        oil: 3,
++        gas: 1,
++        water: 2,
++      },
++      {
++        id: 'T-W2',
++        well: 'W2',
++        battery: 'BAT-1',
++        monthOn: '2024-02-01',
++        oil: 1,
++        gas: 3,
++        water: 1,
++      },
++    ],
++    ownership: [
++      { property: 'W1', owner: 'A', decimal: 0.75, payStatus: 'pay' },
++      { property: 'W1', owner: 'B', decimal: 0.25, payStatus: 'hold' },
++      { property: 'W2', owner: 'A', decimal: 0.5, payStatus: 'pay' },
++      { property: 'W2', owner: 'C', decimal: 0.5, payStatus: 'pay' },
++    ],
++    prices: { oil: 70, gas: 3 },
++    taxRates: { oil: 0.05, gas: 0.1 },
++    ...overrides,
++  };
++}
++
++function completedStages() {
++  const request = closeRequest();
++  const measurements = api.collectCloseMeasurements(MONTH, request);
++  const allocations = api.allocateCloseVolumes(MONTH, measurements, request.theoreticals);
++  const settlement = api.settleCloseOwners(
++    MONTH,
++    allocations,
++    request.ownership,
++    request.prices,
++    request.taxRates,
++  );
++  return { request, measurements, allocations, settlement };
++}
++
++function assertRejectedClose(result, expectedErrors) {
++  assert.equal(result.ok, false);
++  assert.equal(result.status, 'rejected');
++  assert.deepEqual(result.errors, expectedErrors);
++  assert.deepEqual(result.warnings, []);
++  for (const key of [
++    'measurementLines',
++    'controls',
++    'allocations',
++    'allocationControls',
++    'ownerLines',
++    'owners',
++    'payable',
++    'suspense',
++    'snapshots',
++    'journal',
++  ]) {
++    assert.deepEqual(result[key], [], `${key} must be empty on rejection`);
++  }
++  assert.deepEqual(result.reports, { wells: [], owners: [] });
++  assert.deepEqual(result.totals, {
++    measurements: { oilBbl: 0, gasMcf: 0, gasMmbtu: 0, waterBbl: 0 },
++    allocations: { oilBbl: 0, gasMcf: 0, gasMmbtu: 0, waterBbl: 0 },
++    settlement: { gross: 0, tax: 0, net: 0, payable: 0, suspense: 0 },
++  });
++}
++
++test('close request normalization canonicalizes month-end metadata and aliases', () => {
++  const oil = closeRequest().oilTickets;
++  const gas = closeRequest().gasTickets;
++  const water = closeRequest().waterTickets;
++  const doi = closeRequest().ownership;
++  const prices = { oil: 70, gas: 3 };
++  const rates = { oil: 0.05, gas: 0.1 };
++  const result = api.normalizeCloseRequest({
++    month: '2024-02-12',
++    closedOn: '1999-01-01',
++    actor: '  closer  ',
++    oil,
++    gas,
++    water,
++    theoreticals: closeRequest().theoreticals,
++    doi,
++    prices,
++    taxRates: rates,
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.errors, []);
++  assert.equal(result.month, MONTH);
++  assert.equal(result.closedOn, '2024-02-29');
++  assert.equal(result.actor, 'closer');
++  assert.deepEqual(result.oilTickets, oil);
++  assert.deepEqual(result.gasTickets, gas);
++  assert.deepEqual(result.waterTickets, water);
++  assert.deepEqual(result.ownership, doi);
++  assert.deepEqual(result.prices, prices);
++  assert.deepEqual(result.taxRates, rates);
++  assert.notEqual(result.oilTickets, oil);
++  assert.notEqual(result.ownership, doi);
++  assert.notEqual(result.prices, prices);
++  assert.notEqual(result.taxRates, rates);
++});
++
++test('close request normalization rejects non-object requests with complete defaults', () => {
++  for (const input of [null, undefined, 'close', 7, []]) {
++    const result = api.normalizeCloseRequest(input);
++    assert.deepEqual(result, {
++      ok: false,
++      errors: ['invalid_request'],
++      month: '',
++      closedOn: '',
++      actor: '',
++      oilTickets: [],
++      gasTickets: [],
++      waterTickets: [],
++      theoreticals: [],
++      ownership: [],
++      prices: {},
++      taxRates: {},
++    });
++  }
++});
++
++test('close request normalization reports every malformed collection and config', () => {
++  const result = api.normalizeCloseRequest({
++    month: 'not-a-month',
++    actor: '   ',
++    oil: {},
++    gasTickets: 'bad',
++    water: 7,
++    theoreticals: {},
++    ownership: 'bad',
++    prices: [],
++    taxRates: 'bad',
++  });
++
++  assert.equal(result.ok, false);
++  assert.deepEqual(result.errors, [
++    'invalid_collection:gasTickets',
++    'invalid_collection:oil',
++    'invalid_collection:ownership',
++    'invalid_collection:theoreticals',
++    'invalid_collection:water',
++    'invalid_month',
++    'invalid_prices',
++    'invalid_tax_rates',
++    'missing:actor',
++  ]);
++  assert.equal(result.month, '');
++  assert.equal(result.closedOn, '');
++  assert.equal(result.actor, '');
++  assert.deepEqual(result.oilTickets, []);
++  assert.deepEqual(result.prices, {});
++});
++
++test('close request normalization is repeatable and never mutates its caller', () => {
++  const request = closeRequest({ actor: ' closer ' });
++  const before = structuredClone(request);
++  const first = api.normalizeCloseRequest(request);
++  const second = api.normalizeCloseRequest(request);
++
++  assert.equal(first.ok, true);
++  assert.deepEqual(first, second);
++  assert.deepEqual(request, before);
++  assert.equal(first.actor, 'closer');
++  assert.notEqual(first.theoreticals, request.theoreticals);
++  assert.notEqual(first.ownership, request.ownership);
++  assert.notEqual(first.prices, request.prices);
++  assert.equal(first.oilTickets[0], request.oilTickets[0]);
++});
++
++test('close artifacts emit deterministic records accepted by public normalizers', () => {
++  const { allocations, settlement } = completedStages();
++  const result = api.buildCloseArtifacts({
++    month: MONTH,
++    closedOn: '2024-02-29',
++    actor: 'closer',
++    allocations: allocations.lines,
++    ownerLines: settlement.lines,
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.errors, []);
++  assert.equal(result.month, MONTH);
++  assert.equal(result.closedOn, '2024-02-29');
++  assert.equal(result.actor, 'closer');
++  assert.equal(result.snapshots.length, 2);
++  assert.equal(result.wellSummaries.length, 2);
++  assert.equal(result.ownerSummaries.length, 6);
++  assert.equal(result.journalLines.length, 8);
++  assert.ok(result.snapshots.every((row) => api.normalizeSnapshot(row).ok));
++  assert.ok(result.wellSummaries.every((row) => api.normalizeWellSummary(row).ok));
++  assert.ok(result.ownerSummaries.every((row) => api.normalizeOwnerSummary(row).ok));
++  assert.ok(result.journalLines.every((row) => api.normalizeJournalEntry(row).ok));
++  assert.deepEqual(result.totals, {
++    oilBbl: 98,
++    gasMcf: 90,
++    gasMmbtu: 99,
++    waterBbl: 30,
++    gross: 7157,
++    tax: 372.7,
++    net: 6784.3,
++    payable: 5545.656,
++    suspense: 1238.644,
++  });
++});
++
++test('close artifacts combine a well across batteries and sort battery labels', () => {
++  const allocations = [
++    { well: 'W2', battery: 'B-X', oilBbl: 1, gasMcf: 2, gasMmbtu: 3, waterBbl: 4 },
++    { well: 'W1', battery: 'B-Z', oilBbl: 10, gasMcf: 20, gasMmbtu: 30, waterBbl: 40 },
++    { well: 'W1', battery: 'B-A', oilBbl: 5, gasMcf: 7, gasMmbtu: 9, waterBbl: -2 },
++    { well: 'W1', battery: 'B-Z', oilBbl: 2, gasMcf: 3, gasMmbtu: 4, waterBbl: 1 },
++  ];
++  const result = api.buildCloseArtifacts({
++    month: MONTH,
++    closedOn: '2024-02-29',
++    actor: 'closer',
++    allocations,
++    ownerLines: [
++      { owner: 'A', well: 'W1', product: 'oil', status: 'pay', volume: 17, gross: 0, tax: 0, net: 0, payable: 0, suspense: 0 },
++      { owner: 'A', well: 'W1', product: 'gas', status: 'pay', volume: 43, gross: 0, tax: 0, net: 0, payable: 0, suspense: 0 },
++      { owner: 'B', well: 'W2', product: 'oil', status: 'pay', volume: 1, gross: 0, tax: 0, net: 0, payable: 0, suspense: 0 },
++      { owner: 'B', well: 'W2', product: 'gas', status: 'pay', volume: 3, gross: 0, tax: 0, net: 0, payable: 0, suspense: 0 },
++    ],
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.snapshots.map((row) => row.property), ['W1', 'W2']);
++  assert.deepEqual(result.snapshots[0], {
++    id: 'close:2024-02:snapshot:W1',
++    oilBbl: 17,
++    gasMcf: 30,
++    waterBbl: 39,
++    monthOn: '2024-02-01',
++    property: 'W1',
++    kind: 'closed',
++  });
++  assert.deepEqual(result.wellSummaries[0], {
++    id: 'close:2024-02:well:W1',
++    oilBbl: 17,
++    gasMcf: 30,
++    waterBbl: 39,
++    downHrs: null,
++    monthOn: '2024-02-01',
++    well: 'W1',
++    battery: 'B-A,B-Z',
++  });
++  assert.equal(result.totals.gasMmbtu, 46);
++  assert.equal(result.totals.oilBbl, 18);
++  assert.equal(result.totals.waterBbl, 43);
++});
++
++test('close artifacts group owner reports by product and journals by entity', () => {
++  const ownerLines = [
++    {
++      owner: 'A', well: 'W2', product: 'gas', status: 'pay',
++      volume: 2, gross: 6, tax: 0.6, net: 5.4, payable: 5.4, suspense: 0,
++    },
++    {
++      owner: 'A', well: 'W1', product: 'oil', status: 'pay',
++      volume: 3, gross: 210, tax: 10.5, net: 199.5, payable: 199.5, suspense: 0,
++    },
++    {
++      owner: 'A', well: 'W1', product: 'oil', status: 'hold',
++      volume: 1, gross: 70, tax: 3.5, net: 66.5, payable: 0, suspense: 66.5,
++    },
++    {
++      owner: 'B', well: 'W1', product: 'oil', status: 'hold',
++      volume: 2, gross: 140, tax: 7, net: 133, payable: 0, suspense: 133,
++    },
++  ];
++  const result = api.buildCloseArtifacts({
++    month: MONTH,
++    closedOn: '2024-02-29',
++    actor: 'closer',
++    allocations: [
++      { well: 'W1', battery: 'B', oilBbl: 6 },
++      { well: 'W2', battery: 'B', gasMmbtu: 2 },
++    ],
++    ownerLines,
++  });
++
++  assert.equal(result.ok, true);
++  assert.deepEqual(result.ownerSummaries.map((row) => `${row.owner}:${row.product}`), [
++    'A:oil',
++    'A:gas',
++    'B:oil',
++  ]);
++  assert.deepEqual(result.ownerSummaries[0], {
++    id: 'close:2024-02:owner:A:oil',
++    gross: 280,
++    tax: 14,
++    net: 266,
++    volume: 4,
++    monthOn: '2024-02-01',
++    owner: 'A',
++    product: 'oil',
++  });
++  assert.deepEqual(result.journalLines.map((row) => row.id), [
++    'close:2024-02:journal:A:W1:oil',
++    'close:2024-02:journal:A:W2:gas',
++    'close:2024-02:journal:B:W1:oil',
++  ]);
++  assert.equal(result.journalLines[0].afterAmt, 266);
++  assert.equal(result.journalLines[0].reason, 'close:2024-02:suspense');
++  assert.equal(result.journalLines[1].reason, 'close:2024-02:payable');
++  assert.deepEqual(result.totals, {
++    oilBbl: 6,
++    gasMcf: 0,
++    gasMmbtu: 2,
++    waterBbl: 0,
++    gross: 426,
++    tax: 21.6,
++    net: 404.4,
++    payable: 204.9,
++    suspense: 199.5,
++  });
++});
++
++test('close artifacts normalize pay status and hold every other status without rewriting amounts', () => {
++  const ownerLines = [
++    {
++      owner: 'A', well: 'W', product: 'oil', status: 'PAY',
++      volume: 1, gross: 10, tax: 1, net: 9, payable: 9, suspense: 0,
++    },
++    {
++      owner: 'B', well: 'W', product: 'gas', status: '',
++      volume: 2, gross: 4, tax: 0.4, net: 3.6, payable: 0, suspense: 3.6,
++    },
++    {
++      owner: 'C', well: 'W', product: 'oil', status: 'pay',
++      volume: 1, gross: 10, tax: 1, net: 9, payable: 9, suspense: 0,
++    },
++  ];
++  const result = api.buildCloseArtifacts({
++    month: MONTH,
++    closedOn: '2024-02-29',
++    actor: ' close-user ',
++    allocations: [
++      { well: 'W', battery: 'B', oilBbl: 2, gasMmbtu: 2 },
++    ],
++    ownerLines,
++  });
++
++  assert.equal(result.ok, true);
++  assert.equal(result.actor, 'close-user');
++  assert.deepEqual(result.journalLines.map((line) => [line.entity, line.reason]), [
++    ['W:oil:A', 'close:2024-02:payable'],
++    ['W:gas:B', 'close:2024-02:suspense'],
++    ['W:oil:C', 'close:2024-02:payable'],
++  ]);
++  assert.deepEqual(result.journalLines.map((line) => line.actor), [
++    'close-user',
++    'close-user',
++    'close-user',
++  ]);
++  assert.equal(result.totals.payable, 18);
++  assert.equal(result.totals.suspense, 3.6);
++});
++
++test('close artifacts expose stable request and metadata validation failures', () => {
++  const invalidRequest = api.buildCloseArtifacts(null);
++  assert.deepEqual(invalidRequest, {
++    ok: false,
++    errors: ['invalid_artifact_request'],
++    month: '',
++    closedOn: '',
++    actor: '',
++    snapshots: [],
++    wellSummaries: [],
++    ownerSummaries: [],
++    journalLines: [],
++    totals: {
++      oilBbl: 0,
++      gasMcf: 0,
++      gasMmbtu: 0,
++      waterBbl: 0,
++      gross: 0,
++      tax: 0,
++      net: 0,
++      payable: 0,
++      suspense: 0,
++    },
++  });
++
++  const invalidMetadata = api.buildCloseArtifacts({
++    month: 'bad',
++    closedOn: '2024-02-30',
++    actor: ' ',
++    allocations: {},
++    ownerLines: null,
++  });
++  assert.equal(invalidMetadata.ok, false);
++  assert.deepEqual(invalidMetadata.errors, [
++    'invalid_allocations',
++    'invalid_closed_on',
++    'invalid_month',
++    'invalid_owner_lines',
++    'missing_actor',
++  ]);
++  assert.equal(invalidMetadata.month, '');
++  assert.equal(invalidMetadata.closedOn, '');
++  assert.deepEqual(invalidMetadata.snapshots, []);
++  assert.deepEqual(invalidMetadata.journalLines, []);
++
++  const wrongCloseDay = api.buildCloseArtifacts({
++    month: MONTH,
++    closedOn: '2024-03-01',
++    actor: 'closer',
++    allocations: [],
++    ownerLines: [],
++  });
++  assert.equal(wrongCloseDay.ok, false);
++  assert.deepEqual(wrongCloseDay.errors, ['invalid_closed_on']);
++  assert.deepEqual(wrongCloseDay.journalLines, []);
++});
++
++test('close artifacts reject indexed rows while retaining valid public records', () => {
++  const input = {
++    month: MONTH,
++    closedOn: '2024-02-29',
++    actor: 'closer',
++    allocations: [
++      null,
++      { well: 'GOOD', battery: 'B', oilBbl: 4, gasMcf: 3, waterBbl: 2 },
++      { well: 'BAD', battery: 'B', oilBbl: 'many' },
++    ],
++    ownerLines: [
++      { owner: 'A', well: 'GOOD', product: 'oil', status: 'pay', volume: 4, gross: 40, tax: 2, net: 38, payable: 38 },
++      { owner: 'B', well: 'GOOD', product: 'water', status: 'pay', volume: 2 },
++      { owner: 'C', well: 'GOOD', product: 'oil', status: 'pay', volume: 1, gross: 'bad' },
++    ],
++  };
++  const before = structuredClone(input);
++  const result = api.buildCloseArtifacts(input);
++
++  assert.equal(result.ok, false);
++  assert.deepEqual(result.errors, [
++    'invalid_allocation:0',
++    'invalid_allocation:2',
++    'invalid_owner_line:1',
++    'invalid_owner_line:2',
++  ]);
++  assert.equal(result.snapshots.length, 1);
++  assert.equal(result.snapshots[0].property, 'GOOD');
++  assert.equal(result.ownerSummaries.length, 1);
++  assert.equal(result.ownerSummaries[0].owner, 'A');
++  assert.equal(result.journalLines.length, 1);
++  assert.deepEqual(input, before);
++});
++
++test('production month close runs all stages and exposes balanced ground results', () => {
++  const result = api.closeProductionMonth(closeRequest());
++
++  assert.equal(result.ok, true);
++  assert.equal(result.status, 'closed');
++  assert.equal(result.month, MONTH);
++  assert.equal(result.closedOn, '2024-02-29');
++  assert.equal(result.actor, 'closer');
++  assert.deepEqual(result.errors, []);
++  assert.deepEqual(result.warnings, ['held_owner:B']);
++  assert.equal(result.measurementLines.length, 3);
++  assert.equal(result.controls.length, 1);
++  assert.equal(result.allocations.length, 2);
++  assert.equal(result.allocationControls.length, 1);
++  assert.equal(result.ownerLines.length, 8);
++  assert.equal(result.owners.length, 3);
++  assert.equal(result.payable.length, 6);
++  assert.equal(result.suspense.length, 2);
++  assert.equal(result.snapshots.length, 2);
++  assert.equal(result.journal.length, 8);
++  assert.equal(result.reports.wells.length, 2);
++  assert.equal(result.reports.owners.length, 6);
++  assert.deepEqual(result.totals, {
++    measurements: { oilBbl: 98, gasMcf: 90, gasMmbtu: 99, waterBbl: 30 },
++    allocations: { oilBbl: 98, gasMcf: 90, gasMmbtu: 99, waterBbl: 30 },
++    settlement: {
++      gross: 7157,
++      tax: 372.7,
++      net: 6784.3,
++      payable: 5545.656,
++      suspense: 1238.644,
++    },
++  });
++  assert.deepEqual(result.allocationControls[0].residual, {
++    oilBbl: 0,
++    gasMcf: 0,
++    gasMmbtu: 0,
++    waterBbl: 0,
++  });
++  assert.equal(result.totals.settlement.net,
++    result.totals.settlement.payable + result.totals.settlement.suspense);
++});
++
++test('production month close rejects request and stage failures without partial postings', () => {
++  const badRequest = api.closeProductionMonth({ month: 'bad', actor: '' });
++  assertRejectedClose(badRequest, ['invalid_month', 'missing:actor']);
++  assert.equal(badRequest.month, '');
++  assert.equal(badRequest.closedOn, '');
++
++  const duplicateRequest = closeRequest({
++    gasTickets: [],
++    waterTickets: [],
++    oilTickets: [
++      closeRequest().oilTickets[0],
++      { ...closeRequest().oilTickets[0], gross: 50 },
++    ],
++  });
++  const badMeasurements = api.closeProductionMonth(duplicateRequest);
++  assertRejectedClose(badMeasurements, ['duplicate_ticket:oil:O-1']);
++  assert.equal(badMeasurements.month, MONTH);
++  assert.equal(badMeasurements.closedOn, '2024-02-29');
++
++  const noFactors = api.closeProductionMonth(closeRequest({
++    theoreticals: [],
++  }));
++  assertRejectedClose(noFactors, [
++    'no_participants:BAT-1:gas',
++    'no_participants:BAT-1:oil',
++    'no_participants:BAT-1:water',
++  ]);
++
++  const noDeck = api.closeProductionMonth(closeRequest({
++    ownership: [],
++  }));
++  assertRejectedClose(noDeck, ['missing_doi:W1', 'missing_doi:W2']);
++});
++
++test('production month close supports empty months and deterministic held output without mutation', () => {
++  const empty = api.closeProductionMonth({
++    month: MONTH,
++    actor: 'closer',
++  });
++  assert.equal(empty.ok, true);
++  assert.equal(empty.status, 'closed');
++  assert.equal(empty.closedOn, '2024-02-29');
++  assert.deepEqual(empty.warnings, ['empty_close']);
++  assert.deepEqual(empty.measurementLines, []);
++  assert.deepEqual(empty.allocations, []);
++  assert.deepEqual(empty.ownerLines, []);
++  assert.deepEqual(empty.snapshots, []);
++  assert.deepEqual(empty.journal, []);
++
++  const request = closeRequest({
++    actor: '  closer  ',
++    theoreticals: [...closeRequest().theoreticals].reverse(),
++    ownership: [
++      { property: 'W2', owner: 'C', decimal: 0.5, payStatus: 'hold' },
++      { property: 'W2', owner: 'A', decimal: 0.5, payStatus: 'pay' },
++      { property: 'W1', owner: 'B', decimal: 0.25, payStatus: 'hold' },
++      { property: 'W1', owner: 'A', decimal: 0.75, payStatus: 'pay' },
++    ],
++  });
++  const before = structuredClone(request);
++  const first = api.closeProductionMonth(request);
++  const second = api.closeProductionMonth(request);
++
++  assert.equal(first.ok, true);
++  assert.equal(first.actor, 'closer');
++  assert.deepEqual(first.warnings, ['held_owner:B', 'held_owner:C']);
++  assert.deepEqual(first.allocations.map((row) => row.well), ['W1', 'W2']);
++  assert.deepEqual(first.ownerLines.map((row) => `${row.well}:${row.product}:${row.owner}`), [
++    'W1:oil:A',
++    'W1:oil:B',
++    'W1:gas:A',
++    'W1:gas:B',
++    'W2:oil:A',
++    'W2:oil:C',
++    'W2:gas:A',
++    'W2:gas:C',
++  ]);
++  assert.deepEqual(first, second);
++  assert.deepEqual(request, before);
++});
++
++test('close artifacts reject inconsistent owner accounting and unreconciled volumes', () => {
++  const result = api.buildCloseArtifacts({
++    month: MONTH,
++    closedOn: '2024-02-29',
++    actor: 'closer',
++    allocations: [{ well: 'W', battery: 'B', oilBbl: 1 }],
++    ownerLines: [{
++      owner: 'A', well: 'W', product: 'oil', status: 'pay',
++      volume: 2, gross: 10, tax: 1, net: 8, payable: 8, suspense: 0,
++    }],
++  });
++
++  assert.equal(result.ok, false);
++  assert.deepEqual(result.errors, [
++    'invalid_owner_line:0',
++    'owner_volume_mismatch:W:oil',
++  ]);
++
++  const impossibleTax = api.buildCloseArtifacts({
++    month: MONTH,
++    closedOn: '2024-02-29',
++    actor: 'closer',
++    allocations: [{ well: 'W', battery: 'B', oilBbl: 1 }],
++    ownerLines: [{
++      owner: 'A', well: 'W', product: 'oil', status: 'pay',
++      volume: 1, gross: 1, tax: 2, net: -1, payable: -1, suspense: 0,
++    }],
++  });
++  assert.equal(impossibleTax.ok, false);
++  assert.deepEqual(impossibleTax.errors, [
++    'invalid_owner_line:0',
++    'owner_volume_mismatch:W:oil',
++  ]);
++});
++
++test('close artifacts escape identifier components without collapsing distinct entities', () => {
++  const result = api.buildCloseArtifacts({
++    month: MONTH,
++    closedOn: '2024-02-29',
++    actor: 'closer',
++    allocations: [
++      { well: 'W:X', battery: 'B', oilBbl: 1 },
++      { well: 'X', battery: 'B', oilBbl: 1 },
++    ],
++    ownerLines: [
++      { owner: 'A', well: 'W:X', product: 'oil', status: 'pay', volume: 1, gross: 0, tax: 0, net: 0, payable: 0, suspense: 0 },
++      { owner: 'A:W', well: 'X', product: 'oil', status: 'pay', volume: 1, gross: 0, tax: 0, net: 0, payable: 0, suspense: 0 },
++    ],
++  });
++
++  assert.equal(result.ok, true);
++  assert.equal(new Set(result.snapshots.map((row) => row.id)).size, 2);
++  assert.equal(new Set(result.journalLines.map((row) => row.id)).size, 2);
++  assert.ok(result.snapshots.some((row) => row.id === 'close:2024-02:snapshot:W%003AX'));
++  assert.ok(result.journalLines.some((row) => (
++    row.id === 'close:2024-02:journal:A%003AW:X:oil'
++  )));
++});
