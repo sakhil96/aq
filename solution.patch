@@ -1,0 +1,2267 @@
+diff --git a/src/close/allocation.js b/src/close/allocation.js
+new file mode 100644
+index 0000000..eea83eb
+--- /dev/null
++++ b/src/close/allocation.js
+@@ -0,0 +1,507 @@
++/**
++ * Month-end battery-to-well allocation.
++ *
++ * Measured battery controls are distributed using the well theoreticals for
++ * the same production month.  Each product has an independent factor set, and
++ * the existing allocation engines retain their last-line residual behavior.
++ */
++
++import {
++  asFiniteNumber,
++  asTrimmed,
++  flattenPayload,
++  pickFirst,
++  productionMonth,
++  roundTo,
++  uniqueInOrder,
++} from '../core/util.js';
++import { normalizeTheoretical } from '../allocation/theoretical.js';
++import { oilAllocAllocate } from '../allocation/oilAlloc.js';
++import { gasAllocAllocate } from '../allocation/gasAlloc.js';
++import { waterAllocAllocate } from '../allocation/waterAlloc.js';
++
++const TOTAL_KEYS = ['oilBbl', 'gasMcf', 'gasMmbtu', 'waterBbl'];
++
++function zeroTotals() {
++  return {
++    oilBbl: 0,
++    gasMcf: 0,
++    gasMmbtu: 0,
++    waterBbl: 0,
++  };
++}
++
++function rounded(value) {
++  const result = roundTo(value, 4);
++  return result === 0 ? 0 : result;
++}
++
++function roundedFactor(value) {
++  const result = roundTo(value, 8);
++  return result === 0 ? 0 : result;
++}
++
++function isSafeFixedPoint(value, places) {
++  const roundedValue = roundTo(value, places);
++  if (roundedValue === null) return false;
++  return Number.isSafeInteger(Math.round(roundedValue * (10 ** places)));
++}
++
++function copyTotals(source) {
++  const totals = zeroTotals();
++  for (const key of TOTAL_KEYS) {
++    const value = asFiniteNumber(source && source[key]);
++    totals[key] = rounded(value === null ? 0 : value);
++  }
++  return totals;
++}
++
++function addTotals(target, source) {
++  const next = {};
++  for (const key of TOTAL_KEYS) {
++    next[key] = rounded((target[key] || 0) + (source[key] || 0));
++    if (next[key] === null || !isSafeFixedPoint(next[key], 4)) return false;
++  }
++  Object.assign(target, next);
++  return target;
++}
++
++function subtractTotals(left, right) {
++  const residual = zeroTotals();
++  for (const key of TOTAL_KEYS) {
++    residual[key] = rounded((left[key] || 0) - (right[key] || 0));
++  }
++  return residual;
++}
++
++function emptyResult(month, errors = []) {
++  return {
++    ok: errors.length === 0,
++    month,
++    lines: [],
++    controls: [],
++    totals: zeroTotals(),
++    errors,
++  };
++}
++
++function totalsHaveInvalidNumbers(source) {
++  if (!source || typeof source !== 'object') return false;
++  return TOTAL_KEYS.some((key) => {
++    if (!Object.prototype.hasOwnProperty.call(source, key)) return false;
++    const value = asFiniteNumber(source[key]);
++    return value === null || !isSafeFixedPoint(value, 4);
++  });
++}
++
++function controlsFromLines(lines, errors) {
++  const grouped = new Map();
++
++  (Array.isArray(lines) ? lines : []).forEach((line, index) => {
++    if (!line || typeof line !== 'object' || Array.isArray(line)) {
++      errors.push(`invalid_measurement_control:${index}`);
++      return;
++    }
++    const battery = asTrimmed(line.battery);
++    if (!battery || totalsHaveInvalidNumbers(line)) {
++      errors.push(`invalid_measurement_control:${index}`);
++      return;
++    }
++    const totals = copyTotals(line);
++    if (totals.oilBbl < 0 || totals.gasMcf < 0 || totals.gasMmbtu < 0) {
++      errors.push(`invalid_measurement_control:${index}`);
++      return;
++    }
++    if (!grouped.has(battery)) grouped.set(battery, zeroTotals());
++    if (!addTotals(grouped.get(battery), totals)) {
++      errors.push(`invalid_measurement_control:${index}`);
++    }
++  });
++
++  return [...grouped.entries()]
++    .map(([battery, totals]) => ({ battery, ...totals }))
++    .sort((a, b) => a.battery.localeCompare(b.battery));
++}
++
++function normalizeMeasurementControls(measurements, errors) {
++  let source;
++  if (Array.isArray(measurements)) {
++    source = measurements;
++  } else if (measurements && Array.isArray(measurements.controls)) {
++    source = measurements.controls;
++  } else if (measurements && Array.isArray(measurements.lines)) {
++    return controlsFromLines(measurements.lines, errors);
++  } else if (measurements === null || measurements === undefined) {
++    return [];
++  } else {
++    errors.push('invalid_measurements');
++    return [];
++  }
++
++  const grouped = new Map();
++  source.forEach((raw, index) => {
++    if (!raw || typeof raw !== 'object') {
++      errors.push(`invalid_measurement_control:${index}`);
++      return;
++    }
++    const battery = asTrimmed(raw.battery);
++    const values = raw.totals && typeof raw.totals === 'object' ? raw.totals : raw;
++    if (!battery || totalsHaveInvalidNumbers(values)) {
++      errors.push(`invalid_measurement_control:${index}`);
++      return;
++    }
++
++    const totals = copyTotals(values);
++    if (totals.oilBbl < 0 || totals.gasMcf < 0 || totals.gasMmbtu < 0) {
++      errors.push(`invalid_measurement_control:${index}`);
++      return;
++    }
++    if (!grouped.has(battery)) grouped.set(battery, zeroTotals());
++    if (!addTotals(grouped.get(battery), totals)) {
++      errors.push(`invalid_measurement_control:${index}`);
++    }
++  });
++
++  return [...grouped.entries()]
++    .map(([battery, totals]) => ({ battery, ...totals }))
++    .sort((a, b) => a.battery.localeCompare(b.battery));
++}
++
++function rawTheoreticalMonth(raw) {
++  return productionMonth(pickFirst(raw, ['monthOn', 'month']));
++}
++
++function normalizeTheoreticals(targetMonth, payload, errors) {
++  const merged = new Map();
++  const rows = flattenPayload(payload);
++
++  rows.forEach((raw, index) => {
++    const rowMonth = rawTheoreticalMonth(raw);
++    if (rowMonth && rowMonth !== targetMonth) return;
++    if (!rowMonth) {
++      errors.push(`invalid_theoretical:${index}`);
++      return;
++    }
++
++    const row = normalizeTheoretical(raw);
++    if (!row.ok) {
++      errors.push(`invalid_theoretical:${index}`);
++      return;
++    }
++
++    const battery = asTrimmed(row.battery);
++    const well = asTrimmed(row.well) || asTrimmed(row.id);
++    if (!battery || !well) {
++      errors.push(`invalid_theoretical:${index}`);
++      return;
++    }
++
++    const factors = {};
++    let invalidFactor = false;
++    for (const product of ['oil', 'gas', 'water']) {
++      const factor = asFiniteNumber(row[product]);
++      if (factor !== null && factor > 0 && roundedFactor(factor) === null) {
++        invalidFactor = true;
++      }
++      factors[product] = factor !== null && factor > 0 ? factor : null;
++    }
++    if (invalidFactor) {
++      errors.push(`invalid_theoretical:${index}`);
++      return;
++    }
++
++    const key = JSON.stringify([battery, well]);
++    if (!merged.has(key)) {
++      merged.set(key, {
++        battery,
++        well,
++        factors: { oil: [], gas: [], water: [] },
++        indexes: [],
++      });
++    }
++
++    const participant = merged.get(key);
++    for (const product of ['oil', 'gas', 'water']) {
++      if (factors[product] !== null) participant.factors[product].push(factors[product]);
++    }
++    participant.indexes.push(index);
++  });
++
++  const normalizedRows = [];
++  for (const participant of merged.values()) {
++    const normalized = {
++      battery: participant.battery,
++      well: participant.well,
++      oil: 0,
++      gas: 0,
++      water: 0,
++    };
++    let invalid = false;
++    for (const product of ['oil', 'gas', 'water']) {
++      const sum = participant.factors[product]
++        .sort((a, b) => a - b)
++        .reduce((total, factor) => total + factor, 0);
++      const factor = roundedFactor(sum);
++      if (factor === null || (factor > 0 && !isSafeFixedPoint(factor, 8))) {
++        invalid = true;
++        break;
++      }
++      normalized[product] = factor;
++    }
++    if (invalid) {
++      errors.push(`invalid_theoretical:${participant.indexes.at(-1)}`);
++    } else {
++      normalizedRows.push(normalized);
++    }
++  }
++
++  return normalizedRows.sort((a, b) => {
++    const battery = a.battery.localeCompare(b.battery);
++    return battery || a.well.localeCompare(b.well);
++  });
++}
++
++function participantsFor(theoreticals, battery, product) {
++  return theoreticals
++    .filter((row) => row.battery === battery && row[product] > 0)
++    .map((row) => ({ well: row.well, factor: row[product] }))
++    .sort((a, b) => a.well.localeCompare(b.well));
++}
++
++function idPart(value) {
++  return value.replace(
++    /[%:\u0000-\u001f\u007f-\u009f\ud800-\udfff]/g,
++    (character) => `%${character.charCodeAt(0).toString(16).padStart(4, '0').toUpperCase()}`,
++  );
++}
++
++function newWellLine(month, battery, well) {
++  return {
++    id: `${month}:${idPart(battery)}:${idPart(well)}`,
++    month,
++    battery,
++    well,
++    oilFactor: 0,
++    gasFactor: 0,
++    waterFactor: 0,
++    ...zeroTotals(),
++  };
++}
++
++function wellLine(lineMap, month, battery, well) {
++  const key = JSON.stringify([battery, well]);
++  if (!lineMap.has(key)) lineMap.set(key, newWellLine(month, battery, well));
++  return lineMap.get(key);
++}
++
++function allocateOne(amount, participants, allocator) {
++  const allocation = allocator(amount, participants, ['well'], ['factor'], 4);
++  if (!allocation.ok || allocation.lines.length === 0) return allocation;
++
++  // The shared allocators intentionally put their rounded residual on the
++  // final participant.  With controls smaller than one display unit, several
++  // earlier half-up shares can exceed the control and make that residual
++  // negative.  Reconcile in integer display units and cap every interim share
++  // at what remains so a positive control never creates a negative well (and
++  // a negative correction never creates a positive one).
++  const scale = 10 ** 4;
++  const signedTotal = Math.round(amount * scale);
++  const sign = signedTotal < 0 ? -1 : 1;
++  const totalUnits = Math.abs(signedTotal);
++  const factorSum = allocation.lines.reduce((sum, line) => sum + line.factor, 0);
++  let remaining = totalUnits;
++  const lines = allocation.lines.map((line, index) => {
++    const last = index === allocation.lines.length - 1;
++    const desired = last
++      ? remaining
++      : Math.round((totalUnits * line.factor) / factorSum);
++    const units = Math.min(remaining, Math.max(0, desired));
++    remaining -= units;
++    return { ...line, amount: rounded((sign * units) / scale) };
++  });
++
++  return {
++    ...allocation,
++    amount: rounded(signedTotal / scale),
++    lines,
++    residual: 0,
++  };
++}
++
++function copyAllocationToLines({
++  allocation,
++  amountKey,
++  factorKey,
++  month,
++  battery,
++  lineMap,
++}) {
++  for (const allocated of allocation.lines) {
++    const line = wellLine(lineMap, month, battery, allocated.id);
++    line[amountKey] = rounded(allocated.amount);
++    line[factorKey] = roundedFactor(allocated.factor);
++  }
++}
++
++function allocateOil(control, theoreticals, month, lineMap, errors) {
++  if (control.oilBbl === 0) return;
++  const participants = participantsFor(theoreticals, control.battery, 'oil');
++  if (!participants.length) {
++    errors.push(`no_participants:${control.battery}:oil`);
++    return;
++  }
++
++  const allocation = allocateOne(control.oilBbl, participants, oilAllocAllocate);
++  if (!allocation.ok) {
++    errors.push(`allocation_failed:${control.battery}:oil`);
++    return;
++  }
++  copyAllocationToLines({
++    allocation,
++    amountKey: 'oilBbl',
++    factorKey: 'oilFactor',
++    month,
++    battery: control.battery,
++    lineMap,
++  });
++}
++
++function allocateGas(control, theoreticals, month, lineMap, errors) {
++  if (control.gasMcf === 0 && control.gasMmbtu === 0) return;
++  const participants = participantsFor(theoreticals, control.battery, 'gas');
++  if (!participants.length) {
++    errors.push(`no_participants:${control.battery}:gas`);
++    return;
++  }
++
++  const volume = allocateOne(control.gasMcf, participants, gasAllocAllocate);
++  const energy = allocateOne(control.gasMmbtu, participants, gasAllocAllocate);
++  if (!volume.ok || !energy.ok) {
++    errors.push(`allocation_failed:${control.battery}:gas`);
++    return;
++  }
++  copyAllocationToLines({
++    allocation: volume,
++    amountKey: 'gasMcf',
++    factorKey: 'gasFactor',
++    month,
++    battery: control.battery,
++    lineMap,
++  });
++  copyAllocationToLines({
++    allocation: energy,
++    amountKey: 'gasMmbtu',
++    factorKey: 'gasFactor',
++    month,
++    battery: control.battery,
++    lineMap,
++  });
++}
++
++function allocateWater(control, theoreticals, month, lineMap, errors) {
++  if (control.waterBbl === 0) return;
++  const participants = participantsFor(theoreticals, control.battery, 'water');
++  if (!participants.length) {
++    errors.push(`no_participants:${control.battery}:water`);
++    return;
++  }
++
++  const allocation = allocateOne(control.waterBbl, participants, waterAllocAllocate);
++  if (!allocation.ok) {
++    errors.push(`allocation_failed:${control.battery}:water`);
++    return;
++  }
++  copyAllocationToLines({
++    allocation,
++    amountKey: 'waterBbl',
++    factorKey: 'waterFactor',
++    month,
++    battery: control.battery,
++    lineMap,
++  });
++}
++
++function allocatedForBattery(lines, battery) {
++  const totals = zeroTotals();
++  for (const line of lines) {
++    if (line.battery === battery) addTotals(totals, line);
++  }
++  return totals;
++}
++
++/**
++ * Allocate collected battery controls to wells for one production month.
++ */
++export function allocateCloseVolumes(month, measurements, theoreticals = []) {
++  const targetMonth = productionMonth(month);
++  if (!targetMonth) return emptyResult('', ['invalid_month']);
++
++  const errors = [];
++  if (
++    measurements
++    && typeof measurements === 'object'
++    && !Array.isArray(measurements)
++    && measurements.month
++    && productionMonth(measurements.month) !== targetMonth
++  ) {
++    errors.push('measurement_month_mismatch');
++  }
++  if (
++    measurements
++    && typeof measurements === 'object'
++    && !Array.isArray(measurements)
++    && measurements.ok === false
++  ) {
++    const sourceErrors = Array.isArray(measurements.errors)
++      ? measurements.errors.map((error) => asTrimmed(error)).filter(Boolean)
++      : [];
++    errors.push(...(sourceErrors.length ? sourceErrors : ['invalid_measurements']));
++  }
++
++  const measurementControls = normalizeMeasurementControls(measurements, errors);
++  if (errors.length) {
++    const stableErrors = uniqueInOrder(errors).sort((a, b) => a.localeCompare(b));
++    return emptyResult(targetMonth, stableErrors);
++  }
++
++  const normalizedTheoreticals = normalizeTheoreticals(targetMonth, theoreticals, errors);
++  const lineMap = new Map();
++
++  for (const control of measurementControls) {
++    allocateOil(control, normalizedTheoreticals, targetMonth, lineMap, errors);
++    allocateGas(control, normalizedTheoreticals, targetMonth, lineMap, errors);
++    allocateWater(control, normalizedTheoreticals, targetMonth, lineMap, errors);
++  }
++
++  const lines = [...lineMap.values()].sort((a, b) => {
++    const battery = a.battery.localeCompare(b.battery);
++    return battery || a.well.localeCompare(b.well);
++  });
++  const controls = measurementControls.map((control) => {
++    const measured = copyTotals(control);
++    const allocated = allocatedForBattery(lines, control.battery);
++    return {
++      battery: control.battery,
++      measured,
++      allocated,
++      residual: subtractTotals(measured, allocated),
++    };
++  });
++  const totals = zeroTotals();
++  for (const line of lines) {
++    if (!addTotals(totals, line)) {
++      errors.push('allocation_total_overflow');
++      break;
++    }
++  }
++  const stableErrors = uniqueInOrder(errors).sort((a, b) => a.localeCompare(b));
++
++  return {
++    ok: stableErrors.length === 0,
++    month: targetMonth,
++    lines,
++    controls,
++    totals,
++    errors: stableErrors,
++  };
++}
+diff --git a/src/close/artifacts.js b/src/close/artifacts.js
+new file mode 100644
+index 0000000..e79830a
+--- /dev/null
++++ b/src/close/artifacts.js
+@@ -0,0 +1,496 @@
++/**
++ * Audit and reporting artifacts emitted by a completed production month.
++ *
++ * The close engines return calculation-focused rows.  This module translates
++ * those rows into the public snapshot, well-summary, owner-summary, and audit
++ * journal shapes already used elsewhere in Cinderwell.  Input arrays are read
++ * only, aggregated deterministically, and never modified.
++ */
++
++import {
++  asFiniteNumber,
++  asIsoDay,
++  asTrimmed,
++  isBlank,
++  monthWindow,
++  productionMonth,
++  roundTo,
++  validIsoDay,
++} from '../core/util.js';
++import { fromMills, toMills } from '../core/money.js';
++
++const ALLOCATION_NUMBERS = ["oilBbl", "gasMcf", "gasMmbtu", "waterBbl"];
++const OWNER_NUMBERS = ["volume", "gross", "tax", "net", "payable", "suspense"];
++const PRODUCT_ORDER = ["oil", "gas"];
++
++function emptyArtifacts(month, closedOn, actor, errors) {
++  return {
++    ok: errors.length === 0,
++    errors,
++    month,
++    closedOn,
++    actor,
++    snapshots: [],
++    wellSummaries: [],
++    ownerSummaries: [],
++    journalLines: [],
++    totals: {
++      oilBbl: 0,
++      gasMcf: 0,
++      gasMmbtu: 0,
++      waterBbl: 0,
++      gross: 0,
++      tax: 0,
++      net: 0,
++      payable: 0,
++      suspense: 0,
++    },
++  };
++}
++
++function rowsOf(value) {
++  return Array.isArray(value) ? value : [];
++}
++
++function moneyFromMills(value) {
++  return fromMills(value) ?? 0;
++}
++
++function addMoney(left, right) {
++  const leftMills = toMills(left);
++  const rightMills = toMills(right);
++  if (!Number.isSafeInteger(leftMills) || !Number.isSafeInteger(rightMills)) return null;
++  const total = leftMills + rightMills;
++  return Number.isSafeInteger(total) ? moneyFromMills(total) : null;
++}
++
++function fixedNumber(value, places) {
++  const rounded = roundTo(value, places);
++  if (rounded === null) return null;
++  const units = Math.round(rounded * (10 ** places));
++  return Number.isSafeInteger(units) ? rounded : null;
++}
++
++function idPart(value) {
++  return value.replace(
++    /[%:\u0000-\u001f\u007f-\u009f\ud800-\udfff]/g,
++    (character) => `%${character.charCodeAt(0).toString(16).padStart(4, '0').toUpperCase()}`,
++  );
++}
++
++function productIndex(product) {
++  const index = PRODUCT_ORDER.indexOf(product);
++  return index < 0 ? PRODUCT_ORDER.length : index;
++}
++
++function numberField(raw, key, places, errors, errorCode) {
++  const value = asFiniteNumber(raw[key]);
++  const normalized = value === null ? null : fixedNumber(value, places);
++  if (normalized !== null) return normalized;
++  if (!isBlank(raw[key])) errors.push(errorCode);
++  return 0;
++}
++
++function uniqueSorted(values) {
++  return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
++}
++
++/**
++ * Collapse battery allocation rows into a single reporting row for each well.
++ * The list of contributing batteries is retained in sorted order for the well
++ * summary while the audit snapshot remains property-focused.
++ */
++function aggregateWells(month, allocations, errors) {
++  const map = new Map();
++  rowsOf(allocations).forEach((raw, index) => {
++    if (!raw || typeof raw !== "object") {
++      errors.push(`invalid_allocation:${index}`);
++      return;
++    }
++
++    const well = asTrimmed(raw.well);
++    const battery = asTrimmed(raw.battery);
++    const rowMonth = isBlank(raw.month) ? '' : productionMonth(raw.month);
++    if (!well || !battery || (rowMonth && rowMonth !== month) || (!isBlank(raw.month) && !rowMonth)) {
++      errors.push(`invalid_allocation:${index}`);
++      return;
++    }
++
++    const values = {};
++    let badNumber = false;
++    for (const key of ALLOCATION_NUMBERS) {
++      const before = errors.length;
++      values[key] = numberField(raw, key, 4, errors, `invalid_allocation:${index}`);
++      if (errors.length !== before) badNumber = true;
++    }
++    if (badNumber) return;
++
++    if (!map.has(well)) {
++      map.set(well, {
++        well,
++        oilBbl: 0,
++        gasMcf: 0,
++        gasMmbtu: 0,
++        waterBbl: 0,
++        batteries: [],
++      });
++    }
++
++    const row = map.get(well);
++    const next = {};
++    for (const key of ALLOCATION_NUMBERS) {
++      next[key] = fixedNumber(row[key] + values[key], 4);
++      if (next[key] === null) {
++        errors.push(`invalid_allocation:${index}`);
++        return;
++      }
++    }
++    Object.assign(row, next);
++    row.batteries.push(battery);
++  });
++
++  return [...map.values()]
++    .map((row) => ({ ...row, batteries: uniqueSorted(row.batteries) }))
++    .sort((a, b) => a.well.localeCompare(b.well));
++}
++
++function snapshotId(month, well) {
++  return `close:${month}:snapshot:${idPart(well)}`;
++}
++
++function wellSummaryId(month, well) {
++  return `close:${month}:well:${idPart(well)}`;
++}
++
++function ownerSummaryId(month, owner, product) {
++  return `close:${month}:owner:${idPart(owner)}:${idPart(product)}`;
++}
++
++function journalId(month, owner, well, product) {
++  return `close:${month}:journal:${idPart(owner)}:${idPart(well)}:${idPart(product)}`;
++}
++
++function buildSnapshots(month, monthOn, wells) {
++  return wells.map((row) => ({
++    id: snapshotId(month, row.well),
++    oilBbl: row.oilBbl,
++    gasMcf: row.gasMcf,
++    waterBbl: row.waterBbl,
++    monthOn,
++    property: row.well,
++    kind: "closed",
++  }));
++}
++
++function buildWellSummaries(month, monthOn, wells) {
++  return wells.map((row) => ({
++    id: wellSummaryId(month, row.well),
++    oilBbl: row.oilBbl,
++    gasMcf: row.gasMcf,
++    waterBbl: row.waterBbl,
++    downHrs: null,
++    monthOn,
++    well: row.well,
++    battery: row.batteries.join(","),
++  }));
++}
++
++function normalizeOwnerLines(ownerLines, errors) {
++  const rows = [];
++  rowsOf(ownerLines).forEach((raw, index) => {
++    if (!raw || typeof raw !== "object") {
++      errors.push(`invalid_owner_line:${index}`);
++      return;
++    }
++
++    const owner = asTrimmed(raw.owner);
++    const well = asTrimmed(raw.well);
++    const product = asTrimmed(raw.product).toLowerCase();
++    if (!owner || !well || !PRODUCT_ORDER.includes(product)) {
++      errors.push(`invalid_owner_line:${index}`);
++      return;
++    }
++
++    const values = {};
++    let badNumber = false;
++    for (const key of OWNER_NUMBERS) {
++      const before = errors.length;
++      values[key] = numberField(
++        raw,
++        key,
++        key === 'volume' ? 4 : 3,
++        errors,
++        `invalid_owner_line:${index}`,
++      );
++      if (errors.length !== before) badNumber = true;
++    }
++    if (badNumber) return;
++
++    const status = asTrimmed(raw.status).toLowerCase() === 'pay' ? 'pay' : 'hold';
++    const gross = toMills(values.gross);
++    const tax = toMills(values.tax);
++    const net = toMills(values.net);
++    const payable = toMills(values.payable);
++    const suspense = toMills(values.suspense);
++    const validTax = tax === 0 || (
++      gross !== 0
++      && Math.sign(tax) === Math.sign(gross)
++      && Math.abs(tax) <= Math.abs(gross)
++    );
++    const validAccounting = [gross, tax, net, payable, suspense]
++      .every((value) => Number.isSafeInteger(value))
++      && validTax
++      && gross - tax === net
++      && payable + suspense === net
++      && (
++        (status === 'pay' && payable === net && suspense === 0)
++        || (status === 'hold' && payable === 0 && suspense === net)
++      );
++    if (!validAccounting) {
++      errors.push(`invalid_owner_line:${index}`);
++      return;
++    }
++
++    rows.push({
++      owner,
++      well,
++      product,
++      status,
++      ...values,
++    });
++  });
++
++  rows.sort((left, right) => {
++    const byOwner = left.owner.localeCompare(right.owner);
++    if (byOwner !== 0) return byOwner;
++    const byProduct = productIndex(left.product) - productIndex(right.product);
++    if (byProduct !== 0) return byProduct;
++    return left.well.localeCompare(right.well);
++  });
++  return rows;
++}
++
++function reconcileOwnerVolumes(wells, ownerLines, errors) {
++  const controls = new Map();
++  for (const well of wells) {
++    for (const [product, field] of [['oil', 'oilBbl'], ['gas', 'gasMmbtu']]) {
++      if (well[field] === 0) continue;
++      controls.set(JSON.stringify([well.well, product]), well[field]);
++    }
++  }
++
++  const settled = new Map();
++  for (const line of ownerLines) {
++    const key = JSON.stringify([line.well, line.product]);
++    if (!controls.has(key)) {
++      errors.push(`unmatched_owner_volume:${idPart(line.well)}:${line.product}`);
++      continue;
++    }
++    const next = fixedNumber((settled.get(key) || 0) + line.volume, 4);
++    if (next === null) {
++      errors.push(`owner_volume_overflow:${idPart(line.well)}:${line.product}`);
++      continue;
++    }
++    settled.set(key, next);
++  }
++
++  for (const [key, control] of controls) {
++    const [well, product] = JSON.parse(key);
++    if ((settled.get(key) || 0) !== control) {
++      errors.push(`owner_volume_mismatch:${idPart(well)}:${product}`);
++    }
++  }
++}
++
++/**
++ * Existing owner summaries carry one product's volume, so owner lines are
++ * aggregated by owner and product rather than mixing barrels with MMBtu.
++ * Payable and held lines both contribute to gross, tax, and net earnings.
++ */
++function buildOwnerSummaries(month, monthOn, ownerLines, errors) {
++  const map = new Map();
++  for (const line of ownerLines) {
++    const key = JSON.stringify([line.owner, line.product]);
++    if (!map.has(key)) {
++      map.set(key, {
++        id: ownerSummaryId(month, line.owner, line.product),
++        gross: 0,
++        tax: 0,
++        net: 0,
++        volume: 0,
++        monthOn,
++        owner: line.owner,
++        product: line.product,
++      });
++    }
++    const summary = map.get(key);
++    const next = {
++      volume: fixedNumber(summary.volume + line.volume, 4),
++      gross: addMoney(summary.gross, line.gross),
++      tax: addMoney(summary.tax, line.tax),
++      net: addMoney(summary.net, line.net),
++    };
++    if (Object.values(next).some((value) => value === null)) {
++      errors.push(`owner_summary_overflow:${line.owner}:${line.product}`);
++      continue;
++    }
++    Object.assign(summary, next);
++  }
++
++  return [...map.values()].sort((left, right) => {
++    const byOwner = left.owner.localeCompare(right.owner);
++    if (byOwner !== 0) return byOwner;
++    return productIndex(left.product) - productIndex(right.product);
++  });
++}
++
++/**
++ * Settlement rows are already unique by owner/well/product.  Aggregating a
++ * duplicate defensively gives each journal entity one deterministic posting
++ * and avoids identifier collisions when callers compose partial closes.
++ */
++function aggregateJournalEntities(ownerLines, errors) {
++  const map = new Map();
++  for (const line of ownerLines) {
++    const key = JSON.stringify([line.owner, line.well, line.product]);
++    if (!map.has(key)) {
++      map.set(key, {
++        owner: line.owner,
++        well: line.well,
++        product: line.product,
++        net: 0,
++        held: false,
++      });
++    }
++    const entity = map.get(key);
++    const net = addMoney(entity.net, line.net);
++    if (net === null) {
++      errors.push(`journal_overflow:${line.owner}:${line.well}:${line.product}`);
++      continue;
++    }
++    entity.net = net;
++    entity.held = entity.held || line.status !== "pay";
++  }
++
++  return [...map.values()].sort((left, right) => {
++    const byOwner = left.owner.localeCompare(right.owner);
++    if (byOwner !== 0) return byOwner;
++    const byWell = left.well.localeCompare(right.well);
++    if (byWell !== 0) return byWell;
++    return productIndex(left.product) - productIndex(right.product);
++  });
++}
++
++function buildJournalLines(month, closedOn, actor, ownerLines, errors) {
++  if (!closedOn || !actor) return [];
++  return aggregateJournalEntities(ownerLines, errors).map((row) => ({
++    id: journalId(month, row.owner, row.well, row.product),
++    beforeAmt: 0,
++    afterAmt: row.net,
++    at: closedOn,
++    actor,
++    entity: `${row.well}:${row.product}:${row.owner}`,
++    action: "month_close",
++    reason: row.held ? `close:${month}:suspense` : `close:${month}:payable`,
++  }));
++}
++
++function artifactTotals(wells, ownerLines, errors) {
++  const totals = {
++    oilBbl: 0,
++    gasMcf: 0,
++    gasMmbtu: 0,
++    waterBbl: 0,
++    gross: 0,
++    tax: 0,
++    net: 0,
++    payable: 0,
++    suspense: 0,
++  };
++  for (const well of wells) {
++    for (const key of ALLOCATION_NUMBERS) {
++      const next = fixedNumber(totals[key] + well[key], 4);
++      if (next === null) {
++        errors.push('artifact_total_overflow');
++      } else {
++        totals[key] = next;
++      }
++    }
++  }
++  for (const line of ownerLines) {
++    for (const key of ['gross', 'tax', 'net', 'payable', 'suspense']) {
++      const next = addMoney(totals[key], line[key]);
++      if (next === null) {
++        errors.push('artifact_total_overflow');
++      } else {
++        totals[key] = next;
++      }
++    }
++  }
++  return totals;
++}
++
++/**
++ * Build deterministic reporting and audit records for a completed month.
++ * Shapes intentionally match normalizeSnapshot, normalizeWellSummary,
++ * normalizeOwnerSummary, and normalizeJournalEntry.
++ */
++export function buildCloseArtifacts(input = {}) {
++  if (!input || typeof input !== "object" || Array.isArray(input)) {
++    return emptyArtifacts("", "", "", ["invalid_artifact_request"]);
++  }
++  const {
++    month,
++    closedOn,
++    actor,
++    allocations,
++    ownerLines,
++  } = input;
++  const ym = productionMonth(month);
++  const closeDay = asIsoDay(closedOn);
++  const closeActor = asTrimmed(actor);
++  const errors = [];
++
++  if (!ym) errors.push("invalid_month");
++  const expectedCloseDay = monthWindow(ym)?.end || '';
++  if (!validIsoDay(closeDay) || closeDay !== expectedCloseDay) {
++    errors.push("invalid_closed_on");
++  }
++  if (!closeActor) errors.push("missing_actor");
++  if (!Array.isArray(allocations)) errors.push("invalid_allocations");
++  if (!Array.isArray(ownerLines)) errors.push("invalid_owner_lines");
++
++  if (!ym) {
++    return emptyArtifacts("", validIsoDay(closeDay) ? closeDay : "", closeActor, errors.sort());
++  }
++
++  const monthOn = `${ym}-01`;
++  const wells = aggregateWells(ym, allocations, errors);
++  const normalizedOwnerLines = normalizeOwnerLines(ownerLines, errors);
++  reconcileOwnerVolumes(wells, normalizedOwnerLines, errors);
++  const snapshots = buildSnapshots(ym, monthOn, wells);
++  const wellSummaries = buildWellSummaries(ym, monthOn, wells);
++  const ownerSummaries = buildOwnerSummaries(ym, monthOn, normalizedOwnerLines, errors);
++  const journalLines = buildJournalLines(
++    ym,
++    validIsoDay(closeDay) ? closeDay : "",
++    closeActor,
++    normalizedOwnerLines,
++    errors,
++  );
++  const totals = artifactTotals(wells, normalizedOwnerLines, errors);
++  const stableErrors = [...new Set(errors)].sort((a, b) => a.localeCompare(b));
++
++  return {
++    ok: stableErrors.length === 0,
++    errors: stableErrors,
++    month: ym,
++    closedOn: validIsoDay(closeDay) ? closeDay : "",
++    actor: closeActor,
++    snapshots,
++    wellSummaries,
++    ownerSummaries,
++    journalLines,
++    totals,
++  };
++}
+diff --git a/src/close/measurements.js b/src/close/measurements.js
+new file mode 100644
+index 0000000..6983f8c
+--- /dev/null
++++ b/src/close/measurements.js
+@@ -0,0 +1,403 @@
++/**
++ * Month-end measurement collection.
++ *
++ * The close consumes the public ticket engines rather than duplicating their
++ * measurement math.  This module adds the stricter controls needed by a close:
++ * a production month, a physical battery, unique ticket ids, and nonnegative
++ * source quantities.  Bad input is reported in the result and never thrown.
++ */
++
++import {
++  asFiniteNumber,
++  asTrimmed,
++  pickFirst,
++  productionMonth,
++  roundTo,
++  uniqueInOrder,
++} from '../core/util.js';
++import { netRunTicket } from '../tickets/runTicket.js';
++import { dryMcf } from '../tickets/gasTicket.js';
++import { signedWater } from '../tickets/waterTicket.js';
++
++const TOTAL_KEYS = ['oilBbl', 'gasMcf', 'gasMmbtu', 'waterBbl'];
++const PRODUCT_ORDER = { oil: 0, gas: 1, water: 2 };
++
++function zeroTotals() {
++  return {
++    oilBbl: 0,
++    gasMcf: 0,
++    gasMmbtu: 0,
++    waterBbl: 0,
++  };
++}
++
++function rounded(value) {
++  const result = roundTo(value, 4);
++  if (
++    !Number.isFinite(result)
++    || !Number.isSafeInteger(Math.round(result * (10 ** 4)))
++  ) return null;
++  return result === 0 ? 0 : result;
++}
++
++function addTotals(target, source) {
++  const next = {};
++  for (const key of TOTAL_KEYS) {
++    next[key] = rounded((target[key] || 0) + (source[key] || 0));
++    if (next[key] === null) return false;
++  }
++  Object.assign(target, next);
++  return target;
++}
++
++function emptyResult(month, errors = []) {
++  return {
++    ok: errors.length === 0,
++    month,
++    lines: [],
++    controls: [],
++    totals: zeroTotals(),
++    errors,
++  };
++}
++
++function readCollection(payload, names) {
++  for (const name of names) {
++    if (!Object.prototype.hasOwnProperty.call(payload, name)) continue;
++    if (Array.isArray(payload[name])) {
++      return { rows: payload[name], invalid: false, name };
++    }
++    if (payload[name] === null || payload[name] === undefined) {
++      return { rows: [], invalid: false, name };
++    }
++    return { rows: [], invalid: true, name };
++  }
++  return { rows: [], invalid: false, name: names[0] };
++}
++
++function rawBattery(row) {
++  return asTrimmed(pickFirst(row, [
++    'battery',
++    'batteryId',
++    'facility',
++    'facilityId',
++  ]));
++}
++
++function oilBattery(raw, ticket) {
++  return rawBattery(raw) || asTrimmed(ticket.tank) || asTrimmed(ticket.well);
++}
++
++function gasBattery(raw, ticket) {
++  return rawBattery(raw)
++    || asTrimmed(ticket.station)
++    || asTrimmed(ticket.meter)
++    || asTrimmed(ticket.well);
++}
++
++function gasTicketForClose(raw) {
++  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
++    return { ticket: dryMcf(raw), validMode: false };
++  }
++  const suppliedMode = asTrimmed(pickFirst(raw, ['wetDry']));
++  const mode = (suppliedMode || 'wet').toLowerCase();
++  return {
++    ticket: dryMcf({ ...raw, wetDry: mode }),
++    validMode: mode === 'wet' || mode === 'dry',
++  };
++}
++
++function waterBattery(raw, ticket) {
++  return rawBattery(raw)
++    || asTrimmed(ticket.disposal)
++    || asTrimmed(ticket.fromWell);
++}
++
++function ticketLabel(ticket, index) {
++  return asTrimmed(ticket && ticket.id) || String(index);
++}
++
++function duplicateTicketIds(rows, targetMonth, evaluate) {
++  const counts = new Map();
++  for (const raw of rows) {
++    const { ticket, occurredOn } = evaluate(raw);
++    const id = asTrimmed(ticket && ticket.id);
++    if (!id || productionMonth(occurredOn) !== targetMonth) continue;
++    counts.set(id, (counts.get(id) || 0) + 1);
++  }
++  return new Set(
++    [...counts.entries()]
++      .filter(([, count]) => count > 1)
++      .map(([id]) => id),
++  );
++}
++
++function commonLine(id, product, battery, occurredOn) {
++  return {
++    id,
++    product,
++    battery,
++    occurredOn,
++    ...zeroTotals(),
++  };
++}
++
++function collectOil(targetMonth, rows, lines, errors) {
++  const duplicates = duplicateTicketIds(rows, targetMonth, (raw) => {
++    const ticket = netRunTicket(raw);
++    return { ticket, occurredOn: ticket.gaugeDate || ticket.received };
++  });
++
++  rows.forEach((raw, index) => {
++    const ticket = netRunTicket(raw);
++    const label = ticketLabel(ticket, index);
++    const occurredOn = ticket.gaugeDate || ticket.received;
++    const ticketMonth = productionMonth(occurredOn);
++
++    if (!ticketMonth) {
++      errors.push(`invalid_ticket:oil:${label}`);
++      return;
++    }
++    if (ticketMonth !== targetMonth) return;
++
++    if (!ticket.id || !ticket.ok) {
++      errors.push(`invalid_ticket:oil:${label}`);
++      return;
++    }
++    if (duplicates.has(ticket.id)) {
++      errors.push(`duplicate_ticket:oil:${ticket.id}`);
++      return;
++    }
++
++    const sourceQty = asFiniteNumber(pickFirst(raw, ['gross']));
++    const sourceRounded = rounded(sourceQty);
++    const standardGross = rounded(ticket.standardGross);
++    const oilBbl = rounded(ticket.net);
++    if (
++      sourceQty === null
++      || sourceQty < 0
++      || sourceRounded === null
++      || standardGross === null
++      || oilBbl === null
++      || ticket.net < 0
++    ) {
++      errors.push(`invalid_ticket:oil:${ticket.id}`);
++      return;
++    }
++
++    const battery = oilBattery(raw, ticket);
++    if (!battery) {
++      errors.push(`missing_battery:oil:${ticket.id}`);
++      return;
++    }
++
++    const line = commonLine(ticket.id, 'oil', battery, occurredOn);
++    line.oilBbl = oilBbl;
++    lines.push(line);
++  });
++}
++
++function collectGas(targetMonth, rows, lines, errors) {
++  const duplicates = duplicateTicketIds(rows, targetMonth, (raw) => {
++    const { ticket } = gasTicketForClose(raw);
++    return { ticket, occurredOn: ticket.endOn || ticket.startOn };
++  });
++
++  rows.forEach((raw, index) => {
++    const { ticket, validMode } = gasTicketForClose(raw);
++    const label = ticketLabel(ticket, index);
++    const occurredOn = ticket.endOn || ticket.startOn;
++    const ticketMonth = productionMonth(occurredOn);
++    const reversedInterval = Boolean(
++      ticket.startOn
++      && ticket.endOn
++      && ticket.startOn > ticket.endOn
++    );
++
++    if (!ticketMonth) {
++      errors.push(`invalid_ticket:gas:${label}`);
++      return;
++    }
++    if (ticketMonth !== targetMonth) return;
++
++    if (!ticket.id || !ticket.ok || !validMode || reversedInterval) {
++      errors.push(`invalid_ticket:gas:${label}`);
++      return;
++    }
++    if (duplicates.has(ticket.id)) {
++      errors.push(`duplicate_ticket:gas:${ticket.id}`);
++      return;
++    }
++
++    const sourceQty = asFiniteNumber(pickFirst(raw, ['mcf']));
++    const sourceRounded = rounded(sourceQty);
++    const gasMcf = rounded(ticket.dryMcf);
++    const gasMmbtu = rounded(ticket.mmbtu);
++    const co2Pct = ticket.co2Pct === null ? 0 : ticket.co2Pct;
++    const n2Pct = ticket.n2Pct === null ? 0 : ticket.n2Pct;
++    if (
++      sourceQty === null
++      || sourceQty < 0
++      || sourceRounded === null
++      || co2Pct < 0
++      || n2Pct < 0
++      || gasMcf === null
++      || ticket.dryMcf < 0
++      || gasMmbtu === null
++      || ticket.mmbtu < 0
++    ) {
++      errors.push(`invalid_ticket:gas:${ticket.id}`);
++      return;
++    }
++
++    const battery = gasBattery(raw, ticket);
++    if (!battery) {
++      errors.push(`missing_battery:gas:${ticket.id}`);
++      return;
++    }
++
++    const line = commonLine(ticket.id, 'gas', battery, occurredOn);
++    line.gasMcf = gasMcf;
++    line.gasMmbtu = gasMmbtu;
++    lines.push(line);
++  });
++}
++
++function collectWater(targetMonth, rows, lines, errors) {
++  const duplicates = duplicateTicketIds(rows, targetMonth, (raw) => {
++    const ticket = signedWater(raw);
++    return { ticket, occurredOn: ticket.hauledOn };
++  });
++
++  rows.forEach((raw, index) => {
++    const ticket = signedWater(raw);
++    const label = ticketLabel(ticket, index);
++    const occurredOn = ticket.hauledOn;
++    const ticketMonth = productionMonth(occurredOn);
++
++    if (!ticketMonth) {
++      errors.push(`invalid_ticket:water:${label}`);
++      return;
++    }
++    if (ticketMonth !== targetMonth) return;
++
++    if (!ticket.id || !ticket.ok) {
++      errors.push(`invalid_ticket:water:${label}`);
++      return;
++    }
++    if (duplicates.has(ticket.id)) {
++      errors.push(`duplicate_ticket:water:${ticket.id}`);
++      return;
++    }
++
++    const sourceQty = asFiniteNumber(pickFirst(raw, ['bbl']));
++    const magnitude = rounded(sourceQty);
++    const direction = asTrimmed(ticket.direction).toLowerCase() || 'out';
++    if (
++      sourceQty === null
++      || sourceQty < 0
++      || magnitude === null
++      || !Number.isFinite(ticket.signed)
++      || !['out', 'in', 'receipt'].includes(direction)
++    ) {
++      errors.push(`invalid_ticket:water:${ticket.id}`);
++      return;
++    }
++
++    const battery = waterBattery(raw, ticket);
++    if (!battery) {
++      errors.push(`missing_battery:water:${ticket.id}`);
++      return;
++    }
++
++    const line = commonLine(ticket.id, 'water', battery, occurredOn);
++    // Round the positive magnitude before applying direction.  Rounding a
++    // negative half increment first would make equal receipts and haul-outs
++    // asymmetric because JavaScript rounds negative halves toward zero.
++    line.waterBbl = direction === 'out'
++      ? magnitude
++      : magnitude === 0 ? 0 : -magnitude;
++    lines.push(line);
++  });
++}
++
++function compareLines(a, b) {
++  const battery = a.battery.localeCompare(b.battery);
++  if (battery !== 0) return battery;
++  const product = PRODUCT_ORDER[a.product] - PRODUCT_ORDER[b.product];
++  if (product !== 0) return product;
++  return a.id.localeCompare(b.id);
++}
++
++function controlsFor(lines, errors) {
++  const grouped = new Map();
++
++  for (const line of lines) {
++    if (!grouped.has(line.battery)) {
++      grouped.set(line.battery, {
++        battery: line.battery,
++        ticketCount: 0,
++        oilTickets: 0,
++        gasTickets: 0,
++        waterTickets: 0,
++        ...zeroTotals(),
++      });
++    }
++    const control = grouped.get(line.battery);
++    control.ticketCount += 1;
++    control[`${line.product}Tickets`] += 1;
++    if (!addTotals(control, line)) {
++      errors.push(`invalid_measurement_total:${line.battery}`);
++    }
++  }
++
++  return [...grouped.values()].sort((a, b) => a.battery.localeCompare(b.battery));
++}
++
++/**
++ * Normalize and total all measurement tickets for one production month.
++ *
++ * `payload` accepts `oilTickets`, `gasTickets`, and `waterTickets`; the shorter
++ * `oil`, `gas`, and `water` aliases are accepted for callers that already group
++ * their ticket feed by product.
++ */
++export function collectCloseMeasurements(month, payload = {}) {
++  const targetMonth = productionMonth(month);
++  if (!targetMonth) return emptyResult('', ['invalid_month']);
++
++  if (payload === null || payload === undefined) payload = {};
++  if (typeof payload !== 'object' || Array.isArray(payload)) {
++    return emptyResult(targetMonth, ['invalid_payload']);
++  }
++
++  const oil = readCollection(payload, ['oilTickets', 'oil']);
++  const gas = readCollection(payload, ['gasTickets', 'gas']);
++  const water = readCollection(payload, ['waterTickets', 'water']);
++  const errors = [];
++  const lines = [];
++
++  for (const collection of [oil, gas, water]) {
++    if (collection.invalid) errors.push(`invalid_collection:${collection.name}`);
++  }
++
++  collectOil(targetMonth, oil.rows, lines, errors);
++  collectGas(targetMonth, gas.rows, lines, errors);
++  collectWater(targetMonth, water.rows, lines, errors);
++  lines.sort(compareLines);
++
++  const totals = zeroTotals();
++  for (const line of lines) {
++    if (!addTotals(totals, line)) errors.push('invalid_measurement_total');
++  }
++  const controls = controlsFor(lines, errors);
++  const stableErrors = uniqueInOrder(errors).sort((a, b) => a.localeCompare(b));
++
++  return {
++    ok: stableErrors.length === 0,
++    month: targetMonth,
++    lines,
++    controls,
++    totals,
++    errors: stableErrors,
++  };
++}
+diff --git a/src/close/monthClose.js b/src/close/monthClose.js
+new file mode 100644
+index 0000000..97a81ec
+--- /dev/null
++++ b/src/close/monthClose.js
+@@ -0,0 +1,267 @@
++/**
++ * Atomic month-end production close orchestration.
++ *
++ * Each close stage is public for callers that need previews.  This module
++ * supplies the all-or-nothing boundary: malformed input or a failed stage
++ * returns a rejected close without posting allocations, owner earnings, or
++ * audit artifacts.
++ */
++
++import {
++  asTrimmed,
++  monthWindow,
++  productionMonth,
++  uniqueInOrder,
++} from '../core/util.js';
++import { collectCloseMeasurements } from './measurements.js';
++import { allocateCloseVolumes } from './allocation.js';
++import { settleCloseOwners } from './settlement.js';
++import { buildCloseArtifacts } from './artifacts.js';
++
++const COLLECTIONS = [
++  'oilTickets',
++  'gasTickets',
++  'waterTickets',
++  'theoreticals',
++  'ownership',
++];
++
++function zeroVolumeTotals() {
++  return {
++    oilBbl: 0,
++    gasMcf: 0,
++    gasMmbtu: 0,
++    waterBbl: 0,
++  };
++}
++
++function zeroMoneyTotals() {
++  return {
++    gross: 0,
++    tax: 0,
++    net: 0,
++    payable: 0,
++    suspense: 0,
++  };
++}
++
++function emptyReports() {
++  return {
++    wells: [],
++    owners: [],
++  };
++}
++
++function arrayInput(input, primary, aliases = []) {
++  for (const key of [primary, ...aliases]) {
++    if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
++    const value = input[key];
++    if (value === null || value === undefined) {
++      return { value: [], valid: true, key };
++    }
++    if (Array.isArray(value)) {
++      return { value: [...value], valid: true, key };
++    }
++    return { value: [], valid: false, key };
++  }
++  return { value: [], valid: true, key: primary };
++}
++
++function objectInput(input, key) {
++  if (!Object.prototype.hasOwnProperty.call(input, key)) {
++    return { value: {}, valid: true };
++  }
++  const value = input[key];
++  if (value === null || value === undefined) {
++    return { value: {}, valid: true };
++  }
++  if (typeof value !== 'object' || Array.isArray(value)) {
++    return { value: {}, valid: false };
++  }
++  return { value: { ...value }, valid: true };
++}
++
++function requestDefaults() {
++  return {
++    month: '',
++    closedOn: '',
++    actor: '',
++    oilTickets: [],
++    gasTickets: [],
++    waterTickets: [],
++    theoreticals: [],
++    ownership: [],
++    prices: {},
++    taxRates: {},
++  };
++}
++
++/**
++ * Normalize the public close request without mutating the caller's payload.
++ */
++export function normalizeCloseRequest(input) {
++  const request = requestDefaults();
++  if (!input || typeof input !== 'object' || Array.isArray(input)) {
++    return { ok: false, errors: ['invalid_request'], ...request };
++  }
++
++  const errors = [];
++  request.month = productionMonth(input.month);
++  if (!request.month) errors.push('invalid_month');
++
++  const window = monthWindow(request.month);
++  request.closedOn = window ? window.end : '';
++  request.actor = asTrimmed(input.actor);
++  if (!request.actor) errors.push('missing:actor');
++
++  const oil = arrayInput(input, 'oilTickets', ['oil']);
++  const gas = arrayInput(input, 'gasTickets', ['gas']);
++  const water = arrayInput(input, 'waterTickets', ['water']);
++  const theoreticals = arrayInput(input, 'theoreticals');
++  const ownership = arrayInput(input, 'ownership', ['doi']);
++  const values = { oilTickets: oil, gasTickets: gas, waterTickets: water, theoreticals, ownership };
++
++  for (const name of COLLECTIONS) {
++    const collection = values[name];
++    request[name] = collection.value;
++    if (!collection.valid) errors.push(`invalid_collection:${collection.key}`);
++  }
++
++  const prices = objectInput(input, 'prices');
++  const taxRates = objectInput(input, 'taxRates');
++  request.prices = prices.value;
++  request.taxRates = taxRates.value;
++  if (!prices.valid) errors.push('invalid_prices');
++  if (!taxRates.valid) errors.push('invalid_tax_rates');
++
++  const stableErrors = uniqueInOrder(errors).sort((a, b) => a.localeCompare(b));
++  return {
++    ok: stableErrors.length === 0,
++    errors: stableErrors,
++    ...request,
++  };
++}
++
++function rejectedClose(request, stageErrors) {
++  const errors = uniqueInOrder([
++    ...(Array.isArray(request.errors) ? request.errors : []),
++    ...(Array.isArray(stageErrors) ? stageErrors : []),
++  ]).filter(Boolean).sort((a, b) => a.localeCompare(b));
++
++  return {
++    ok: false,
++    status: 'rejected',
++    month: request.month || '',
++    closedOn: request.closedOn || '',
++    actor: request.actor || '',
++    errors,
++    warnings: [],
++    measurementLines: [],
++    controls: [],
++    allocations: [],
++    allocationControls: [],
++    ownerLines: [],
++    owners: [],
++    payable: [],
++    suspense: [],
++    snapshots: [],
++    journal: [],
++    reports: emptyReports(),
++    totals: {
++      measurements: zeroVolumeTotals(),
++      allocations: zeroVolumeTotals(),
++      settlement: zeroMoneyTotals(),
++    },
++  };
++}
++
++function heldWarnings(lines) {
++  const owners = (Array.isArray(lines) ? lines : [])
++    .filter((line) => line && line.status === 'hold')
++    .map((line) => asTrimmed(line.owner))
++    .filter(Boolean)
++    .sort((a, b) => a.localeCompare(b));
++  return uniqueInOrder(owners).map((owner) => `held_owner:${owner}`);
++}
++
++function settlementLines(result, key) {
++  const rows = result && result[key];
++  return Array.isArray(rows) ? rows : [];
++}
++
++/**
++ * Run measurement, allocation, DOI settlement, reporting, and audit creation
++ * as one deterministic month-end close.
++ */
++export function closeProductionMonth(input) {
++  const request = normalizeCloseRequest(input);
++  if (!request.ok) return rejectedClose(request, []);
++
++  const measurements = collectCloseMeasurements(request.month, {
++    oilTickets: request.oilTickets,
++    gasTickets: request.gasTickets,
++    waterTickets: request.waterTickets,
++  });
++  if (!measurements.ok) return rejectedClose(request, measurements.errors);
++
++  const allocations = allocateCloseVolumes(
++    request.month,
++    measurements,
++    request.theoreticals,
++  );
++  if (!allocations.ok) return rejectedClose(request, allocations.errors);
++
++  const settlement = settleCloseOwners(
++    request.month,
++    allocations,
++    request.ownership,
++    request.prices,
++    request.taxRates,
++  );
++  if (!settlement.ok) return rejectedClose(request, settlement.errors);
++
++  const artifacts = buildCloseArtifacts({
++    month: request.month,
++    closedOn: request.closedOn,
++    actor: request.actor,
++    allocations: allocations.lines,
++    ownerLines: settlement.lines,
++  });
++  if (!artifacts.ok) return rejectedClose(request, artifacts.errors);
++
++  const payable = settlementLines(settlement, 'payableLines');
++  const suspense = settlementLines(settlement, 'suspenseLines');
++  const warnings = [
++    ...(measurements.lines.length === 0 ? ['empty_close'] : []),
++    ...heldWarnings(settlement.lines),
++  ];
++
++  return {
++    ok: true,
++    status: 'closed',
++    month: request.month,
++    closedOn: request.closedOn,
++    actor: request.actor,
++    errors: [],
++    warnings,
++    measurementLines: measurements.lines,
++    controls: measurements.controls,
++    allocations: allocations.lines,
++    allocationControls: allocations.controls,
++    ownerLines: settlement.lines,
++    owners: settlement.owners,
++    payable,
++    suspense,
++    snapshots: artifacts.snapshots,
++    journal: artifacts.journalLines,
++    reports: {
++      wells: artifacts.wellSummaries,
++      owners: artifacts.ownerSummaries,
++    },
++    totals: {
++      measurements: measurements.totals,
++      allocations: allocations.totals,
++      settlement: settlement.totals,
++    },
++  };
++}
+diff --git a/src/close/settlement.js b/src/close/settlement.js
+new file mode 100644
+index 0000000..7a2f3bf
+--- /dev/null
++++ b/src/close/settlement.js
+@@ -0,0 +1,525 @@
++/**
++ * Month-close owner settlement.
++ *
++ * Allocated oil barrels and gas MMBtu are valued by product, then distributed
++ * through each well's DOI deck.  Dollar fields use integer mills so every
++ * owner line adds back to the well/product control even when decimals repeat.
++ * This module is intentionally side-effect free and never mutates caller data.
++ */
++
++import {
++  asFiniteNumber,
++  asTrimmed,
++  pickFirst,
++  productionMonth,
++  roundTo,
++} from '../core/util.js';
++import { fromMills, toMills } from '../core/money.js';
++
++const DOI_TOLERANCE = 1e-8;
++const VOLUME_PLACES = 4;
++const PRODUCT_ORDER = ["oil", "gas"];
++
++function emptyTotals() {
++  return {
++    gross: 0,
++    tax: 0,
++    net: 0,
++    payable: 0,
++    suspense: 0,
++  };
++}
++
++function asRows(value, key) {
++  if (Array.isArray(value)) return value;
++  if (value && typeof value === "object" && Array.isArray(value[key])) {
++    return value[key];
++  }
++  return [];
++}
++
++function addRounded(left, right, places) {
++  return roundTo((left || 0) + (right || 0), places);
++}
++
++function moneyFromMills(value) {
++  return fromMills(value) ?? 0;
++}
++
++function safeFixedPoint(value, places) {
++  const rounded = roundTo(value, places);
++  if (rounded === null) return null;
++  const units = Math.round(rounded * (10 ** places));
++  return Number.isSafeInteger(units) ? rounded : null;
++}
++
++function signedRoundedInteger(value) {
++  if (!Number.isFinite(value)) return null;
++  const units = Math.round(Math.abs(value));
++  if (!Number.isSafeInteger(units)) return null;
++  if (units === 0) return 0;
++  return value < 0 ? -units : units;
++}
++
++function productIndex(product) {
++  const index = PRODUCT_ORDER.indexOf(product);
++  return index < 0 ? PRODUCT_ORDER.length : index;
++}
++
++function compareLines(left, right) {
++  const byWell = left.well.localeCompare(right.well);
++  if (byWell !== 0) return byWell;
++  const byProduct = productIndex(left.product) - productIndex(right.product);
++  if (byProduct !== 0) return byProduct;
++  return left.owner.localeCompare(right.owner);
++}
++
++/**
++ * Convert allocation output to one row per well.  A battery can contribute
++ * more than one row for a well, so aggregation occurs before DOI validation.
++ */
++function allocationRows(allocation, errors) {
++  if (Array.isArray(allocation)) return allocation;
++  if (allocation === null || allocation === undefined) return [];
++  if (!allocation || typeof allocation !== "object") {
++    errors.push("invalid_allocation");
++    return [];
++  }
++  if (allocation.ok === false) {
++    const sourceErrors = Array.isArray(allocation.errors)
++      ? allocation.errors.map((error) => asTrimmed(error)).filter(Boolean)
++      : [];
++    errors.push(...(sourceErrors.length ? sourceErrors : ["invalid_allocation"]));
++    return [];
++  }
++  if (!Array.isArray(allocation.lines)) {
++    errors.push("invalid_allocation");
++    return [];
++  }
++  return allocation.lines;
++}
++
++function allocationNumber(raw, key) {
++  if (!Object.prototype.hasOwnProperty.call(raw, key)) return { ok: true, value: 0 };
++  const value = asFiniteNumber(raw[key]);
++  const normalized = value === null ? null : safeFixedPoint(value, VOLUME_PLACES);
++  if (normalized !== null) return { ok: true, value: normalized };
++  if (raw[key] === null || raw[key] === undefined || asTrimmed(raw[key]) === "") {
++    return { ok: true, value: 0 };
++  }
++  return { ok: false, value: 0 };
++}
++
++function aggregateAllocation(allocation, errors) {
++  const rows = allocationRows(allocation, errors);
++  const wells = new Map();
++
++  rows.forEach((raw, index) => {
++    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
++      errors.push(`invalid_allocation:${index}`);
++      return;
++    }
++    const well = asTrimmed(raw.well);
++    if (!well) {
++      errors.push(`invalid_allocation:${index}`);
++      return;
++    }
++
++    const oil = allocationNumber(raw, "oilBbl");
++    const gas = allocationNumber(raw, "gasMmbtu");
++    if (!oil.ok || !gas.ok) {
++      errors.push(`invalid_allocation:${index}`);
++      return;
++    }
++
++    const existing = wells.get(well) || { well, oilBbl: 0, gasMmbtu: 0 };
++    const oilBbl = addRounded(existing.oilBbl, oil.value, VOLUME_PLACES);
++    const gasMmbtu = addRounded(existing.gasMmbtu, gas.value, VOLUME_PLACES);
++    if (
++      safeFixedPoint(oilBbl, VOLUME_PLACES) === null
++      || safeFixedPoint(gasMmbtu, VOLUME_PLACES) === null
++    ) {
++      errors.push(`invalid_allocation:${index}`);
++      return;
++    }
++    wells.set(well, { well, oilBbl, gasMmbtu });
++  });
++
++  return [...wells.values()].sort((a, b) => a.well.localeCompare(b.well));
++}
++
++function configuredNumber(config, key) {
++  if (!config || typeof config !== "object") return { supplied: false, value: null };
++  if (!Object.prototype.hasOwnProperty.call(config, key)) {
++    return { supplied: false, value: null };
++  }
++  return { supplied: true, value: asFiniteNumber(config[key]) };
++}
++
++/**
++ * Prices are needed only when the corresponding allocated quantity is nonzero.
++ * A zero price is valid; a negative, missing, or non-finite price is not.
++ */
++function readPrices(prices, activeProducts, errors) {
++  const out = new Map();
++  for (const product of PRODUCT_ORDER) {
++    if (!activeProducts.has(product)) continue;
++    const configured = configuredNumber(prices, product);
++    const normalized = configured.value === null
++      ? null
++      : safeFixedPoint(configured.value, 6);
++    if (!configured.supplied || normalized === null || normalized < 0) {
++      errors.push(`invalid_price:${product}`);
++      continue;
++    }
++    out.set(product, normalized);
++  }
++  return out;
++}
++
++/**
++ * Omitted rates are zero.  An explicitly supplied rate must be between zero
++ * and one, inclusive.  Invalid active-product rates prevent that product from
++ * being settled rather than silently changing the configured tax treatment.
++ */
++function readTaxRates(taxRates, activeProducts, errors) {
++  const out = new Map();
++  for (const product of PRODUCT_ORDER) {
++    if (!activeProducts.has(product)) continue;
++    const configured = configuredNumber(taxRates, product);
++    if (!configured.supplied) {
++      out.set(product, 0);
++      continue;
++    }
++    if (configured.value === null || configured.value < 0 || configured.value > 1) {
++      errors.push(`invalid_tax_rate:${product}`);
++      continue;
++    }
++    out.set(product, configured.value);
++  }
++  return out;
++}
++
++function ownerIdOf(row) {
++  return asTrimmed(pickFirst(row, ["id", "owner", "ownerId"]));
++}
++
++function isPayStatus(value) {
++  const status = asTrimmed(value).toLowerCase();
++  return status === "" || status === "pay";
++}
++
++/**
++ * Select and merge a well's DOI rows.  Duplicate rows for the same owner are
++ * common after deck imports; their decimals add together.  A merged owner is
++ * held if any contributing row is not explicitly payable.
++ */
++function doiForWell(well, ownership) {
++  const candidates = asRows(ownership, "rows").filter(
++    (row) => row && typeof row === "object" && asTrimmed(row.property) === well,
++  );
++
++  if (candidates.length === 0) {
++    return { ok: false, missing: true, owners: [] };
++  }
++
++  let invalid = false;
++  const owners = new Map();
++  for (const row of candidates) {
++    const owner = ownerIdOf(row);
++    const decimal = asFiniteNumber(row.decimal);
++    if (!owner || decimal === null || decimal <= 0 || decimal > 1) {
++      invalid = true;
++      continue;
++    }
++
++    if (!owners.has(owner)) {
++      owners.set(owner, { owner, decimals: [], pay: true });
++    }
++    const merged = owners.get(owner);
++    merged.decimals.push(decimal);
++    merged.pay = merged.pay && isPayStatus(row.payStatus);
++  }
++
++  const rows = [...owners.values()]
++    .map((row) => ({
++      owner: row.owner,
++      decimal: roundTo(
++        [...row.decimals]
++          .sort((a, b) => a - b)
++          .reduce((sum, decimal) => sum + decimal, 0),
++        12,
++      ),
++      pay: row.pay,
++    }))
++    .sort((a, b) => a.owner.localeCompare(b.owner));
++  const sum = rows.reduce((total, row) => total + row.decimal, 0);
++  if (invalid || rows.length === 0 || Math.abs(sum - 1) > DOI_TOLERANCE) {
++    return { ok: false, missing: false, owners: rows, sum };
++  }
++
++  // Normalize harmless import drift that falls inside the DOI tolerance.  The
++  // final owner absorbs the displayed-decimal residue deterministically.
++  let used = 0;
++  const normalized = rows.map((row, index) => {
++    const last = index === rows.length - 1;
++    const decimal = last
++      ? roundTo(1 - used, 12)
++      : roundTo(row.decimal / sum, 12);
++    if (!last) used = roundTo(used + decimal, 12);
++    return { ...row, decimal };
++  });
++
++  return { ok: true, missing: false, owners: normalized, sum };
++}
++
++/**
++ * Allocate an integer control by DOI.  All but the final owner are rounded;
++ * the final owner receives the exact remaining units.  This supports positive
++ * production as well as negative correction batches.
++ */
++function distributeInteger(total, owners) {
++  const sign = total < 0 ? -1 : 1;
++  const absoluteTotal = Math.abs(total);
++  let remaining = absoluteTotal;
++  return owners.map((owner, index) => {
++    const last = index === owners.length - 1;
++    const desired = last
++      ? remaining
++      : Math.round(absoluteTotal * owner.decimal);
++    const value = Math.min(remaining, Math.max(0, desired));
++    remaining -= value;
++    return sign * value;
++  });
++}
++
++/**
++ * Allocate an integer tax control without ever assigning more tax to an owner
++ * than that owner's gross control.  Ordinary cases use the same DOI rounding
++ * as other controls; only a capacity-bound rounding residue is redistributed.
++ */
++function distributeCappedInteger(total, owners, capacities) {
++  const sign = total < 0 ? -1 : 1;
++  const absoluteTotal = Math.abs(total);
++  const available = capacities.map((capacity) => Math.abs(capacity));
++  if (
++    !Number.isSafeInteger(absoluteTotal)
++    || available.some((capacity) => !Number.isSafeInteger(capacity))
++    || available.reduce((sum, capacity) => sum + capacity, 0) < absoluteTotal
++  ) {
++    return { ok: false, values: [] };
++  }
++
++  let remaining = absoluteTotal;
++  const values = owners.map((owner, index) => {
++    const last = index === owners.length - 1;
++    const desired = last ? remaining : Math.round(absoluteTotal * owner.decimal);
++    const value = Math.min(remaining, available[index], Math.max(0, desired));
++    remaining -= value;
++    return value;
++  });
++
++  // If the nominal residual owner is already at capacity, place the residue
++  // with the nearest preceding owner that still has untaxed gross.
++  for (let index = values.length - 1; index >= 0 && remaining > 0; index -= 1) {
++    const room = available[index] - values[index];
++    const value = Math.min(remaining, room);
++    values[index] += value;
++    remaining -= value;
++  }
++
++  return {
++    ok: remaining === 0,
++    values: values.map((value) => (value === 0 ? 0 : sign * value)),
++  };
++}
++
++function productQuantity(well, product) {
++  return product === "oil" ? well.oilBbl : well.gasMmbtu;
++}
++
++function ownerRollups(lines, errors) {
++  const map = new Map();
++  for (const line of lines) {
++    if (!map.has(line.owner)) {
++      map.set(line.owner, {
++        owner: line.owner,
++        gross: 0,
++        tax: 0,
++        net: 0,
++        payable: 0,
++        suspense: 0,
++      });
++    }
++    const owner = map.get(line.owner);
++    for (const key of Object.keys(emptyTotals())) {
++      const mills = toMills(line[key]);
++      const next = mills === null ? null : owner[key] + mills;
++      if (!Number.isSafeInteger(next)) {
++        errors.push('settlement_overflow');
++        continue;
++      }
++      owner[key] = next;
++    }
++  }
++  return [...map.values()]
++    .map((owner) => Object.fromEntries(
++      Object.entries(owner).map(([key, value]) => [
++        key,
++        key === 'owner' ? value : moneyFromMills(value),
++      ]),
++    ))
++    .sort((a, b) => a.owner.localeCompare(b.owner));
++}
++
++function settlementTotals(lines, errors) {
++  const mills = {
++    gross: 0,
++    tax: 0,
++    net: 0,
++    payable: 0,
++    suspense: 0,
++  };
++  for (const line of lines) {
++    for (const key of Object.keys(mills)) {
++      const value = toMills(line[key]);
++      const next = value === null ? null : mills[key] + value;
++      if (!Number.isSafeInteger(next)) {
++        errors.push('settlement_overflow');
++        continue;
++      }
++      mills[key] = next;
++    }
++  }
++  return Object.fromEntries(
++    Object.entries(mills).map(([key, value]) => [key, moneyFromMills(value)]),
++  );
++}
++
++function emptyResult(month, errors) {
++  return {
++    ok: errors.length === 0,
++    month,
++    lines: [],
++    owners: [],
++    payableLines: [],
++    suspenseLines: [],
++    totals: emptyTotals(),
++    errors,
++  };
++}
++
++/**
++ * Value allocated close volumes and distribute them to owners.
++ *
++ * `allocation` can be the close allocation result (`{ lines: [...] }`) or an
++ * array of canonical allocation lines.  `ownership` can likewise be an array
++ * or `{ rows: [...] }`.  Water is operational only and is never settled here.
++ */
++export function settleCloseOwners(month, allocation, ownership, prices, taxRates = {}) {
++  const ym = productionMonth(month);
++  if (!ym) return emptyResult("", ["invalid_month"]);
++
++  const errors = [];
++  if (
++    allocation
++    && typeof allocation === "object"
++    && !Array.isArray(allocation)
++    && allocation.month
++    && productionMonth(allocation.month) !== ym
++  ) {
++    errors.push("allocation_month_mismatch");
++  }
++  const wells = aggregateAllocation(allocation, errors);
++  const activeProducts = new Set();
++  for (const well of wells) {
++    if (well.oilBbl !== 0) activeProducts.add("oil");
++    if (well.gasMmbtu !== 0) activeProducts.add("gas");
++  }
++
++  const productPrices = readPrices(prices, activeProducts, errors);
++  const productTaxRates = readTaxRates(taxRates, activeProducts, errors);
++  const invalidProducts = new Set(
++    errors
++      .filter((error) => error.startsWith("invalid_price:") || error.startsWith("invalid_tax_rate:"))
++      .map((error) => error.slice(error.indexOf(":") + 1)),
++  );
++
++  const lines = [];
++  for (const well of wells) {
++    const products = PRODUCT_ORDER.filter((product) => productQuantity(well, product) !== 0);
++    if (products.length === 0) continue;
++
++    const doi = doiForWell(well.well, ownership);
++    if (!doi.ok) {
++      errors.push(`${doi.missing ? "missing_doi" : "unbalanced_doi"}:${well.well}`);
++      continue;
++    }
++
++    for (const product of products) {
++      if (invalidProducts.has(product)) continue;
++      const price = productPrices.get(product);
++      const taxRate = productTaxRates.get(product) ?? 0;
++      const volume = safeFixedPoint(productQuantity(well, product), VOLUME_PLACES);
++      const volumeUnits = volume === null
++        ? null
++        : signedRoundedInteger(volume * (10 ** VOLUME_PLACES));
++      const grossMills = volume === null
++        ? null
++        : signedRoundedInteger(volume * price * 1000);
++      const taxMills = grossMills === null
++        ? null
++        : signedRoundedInteger(grossMills * taxRate);
++      if (volumeUnits === null || grossMills === null || taxMills === null) {
++        errors.push(`settlement_overflow:${well.well}:${product}`);
++        continue;
++      }
++      const volumes = distributeInteger(volumeUnits, doi.owners);
++      const gross = distributeInteger(grossMills, doi.owners);
++      const taxAllocation = distributeCappedInteger(taxMills, doi.owners, gross);
++      if (!taxAllocation.ok) {
++        errors.push(`settlement_overflow:${well.well}:${product}`);
++        continue;
++      }
++      const tax = taxAllocation.values;
++
++      for (let index = 0; index < doi.owners.length; index += 1) {
++        const owner = doi.owners[index];
++        const ownerGross = gross[index];
++        const ownerTax = tax[index];
++        const ownerNet = ownerGross - ownerTax;
++        const payable = owner.pay ? ownerNet : 0;
++        const suspense = owner.pay ? 0 : ownerNet;
++        lines.push({
++          owner: owner.owner,
++          well: well.well,
++          product,
++          decimal: owner.decimal,
++          volume: roundTo(volumes[index] / (10 ** VOLUME_PLACES), VOLUME_PLACES),
++          price,
++          gross: moneyFromMills(ownerGross),
++          tax: moneyFromMills(ownerTax),
++          net: moneyFromMills(ownerNet),
++          status: owner.pay ? "pay" : "hold",
++          payable: moneyFromMills(payable),
++          suspense: moneyFromMills(suspense),
++        });
++      }
++    }
++  }
++
++  lines.sort(compareLines);
++  const owners = ownerRollups(lines, errors);
++  const totals = settlementTotals(lines, errors);
++  const stableErrors = [...new Set(errors)].sort((a, b) => a.localeCompare(b));
++  return {
++    ok: stableErrors.length === 0,
++    month: ym,
++    lines,
++    owners,
++    payableLines: lines.filter((line) => line.status === "pay"),
++    suspenseLines: lines.filter((line) => line.status === "hold"),
++    totals,
++    errors: stableErrors,
++  };
++}
+diff --git a/src/core/util.js b/src/core/util.js
+index c46157b..911ca92 100644
+--- a/src/core/util.js
++++ b/src/core/util.js
+@@ -12,3 +12,7 @@ export function asTrimmed(value) {
+   if (value === null || value === undefined) return "";
+-  return String(value).trim();
++  try {
++    return String(value).trim();
++  } catch {
++    return "";
++  }
+ }
+@@ -30,3 +34,4 @@ export function roundTo(value, places) {
+   const f = 10 ** Math.max(0, Math.min(12, p));
+-  return Math.round((n + Number.EPSILON) * f) / f;
++  const result = Math.round((n + Number.EPSILON) * f) / f;
++  return Number.isFinite(result) ? result : null;
+ }
+diff --git a/src/index.js b/src/index.js
+index d032647..f0582bb 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -70 +70,6 @@ export * from './settle/severance.js';
+ export * from './settle/escheat.js';
++export * from './close/measurements.js';
++export * from './close/allocation.js';
++export * from './close/settlement.js';
++export * from './close/artifacts.js';
++export * from './close/monthClose.js';
+diff --git a/src/tickets/runTicket.js b/src/tickets/runTicket.js
+index 9542869..9410ed4 100644
+--- a/src/tickets/runTicket.js
++++ b/src/tickets/runTicket.js
+@@ -217,3 +217,3 @@ export function netRunTicket(input) {
+     const sg = 141.5 / (row.api + 131.5);
+-    const a = 341.0957 / (sg ** 2);
++    const a = (341.0957 / (sg ** 2)) * 1e-6;
+     const dt = row.tempF - 60;
