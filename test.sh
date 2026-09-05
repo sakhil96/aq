@@ -22,7 +22,6 @@ run_log() { echo "+ $*" >> "$RUN_LOG" 2>/dev/null; "$@" 2>&1 | tee -a "$RUN_LOG"
 require_cmd() { command -v "$1" >/dev/null 2>&1 || { log "ERROR: missing $1; PATH=$PATH"; exit 127; }; }
 require_cmd node
 require_cmd python3
-require_cmd junit-to-ctrf
 
 NEW_FILES=(
   test/close/closeStages.test.js
@@ -51,8 +50,188 @@ run_node_file() {
     --test-reporter=junit --test-reporter-destination="$raw" \
     "$file" 2>&1 | tee -a "$RUN_LOG"
   local rc="${PIPESTATUS[0]}"
+  printf '[verifier] %s exit status=%d file=%s\n' \
+    "$mode" "$rc" "$file" | tee -a "$RUN_LOG"
   wrap_node_junit "$raw" "$xml" "$file" || true
   return "$rc"
+}
+
+junit_to_ctrf() {
+  local pattern="$1"
+  local output="$2"
+
+  python3 - "$pattern" "$output" <<'PY'
+import glob
+import json
+import math
+import os
+import re
+import sys
+import xml.etree.ElementTree as ET
+
+pattern, output = sys.argv[1:3]
+tests = []
+counts = {"passed": 0, "failed": 0, "skipped": 0}
+raw_counts = {"failure": 0, "error": 0, "skipped": 0}
+
+
+def local_name(tag):
+    return tag.rsplit("}", 1)[-1]
+
+
+def milliseconds(value):
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(seconds) or seconds < 0:
+        return 0
+    return int(math.floor(seconds * 1000 + 0.5))
+
+
+def joined(values):
+    result = []
+    for value in values:
+        value = value.strip()
+        if value and value not in result:
+            result.append(value)
+    return "\n".join(result)
+
+
+def add_test(case, suites):
+    case_name = (case.get("name") or "").strip()
+    if not case_name:
+        return
+
+    markers = [
+        (local_name(child.tag), child)
+        for child in case
+        if local_name(child.tag) in ("failure", "error", "skipped")
+    ]
+    errors = [child for kind, child in markers if kind == "error"]
+    failures = [child for kind, child in markers if kind == "failure"]
+    skipped = [child for kind, child in markers if kind == "skipped"]
+
+    if errors:
+        raw_status, status, details = "error", "failed", errors + failures
+    elif failures:
+        raw_status, status, details = "failure", "failed", failures
+    elif skipped:
+        raw_status, status, details = "skipped", "skipped", skipped
+    else:
+        raw_status, status, details = "passed", "passed", []
+
+    file_suite = suites[0] if suites else ""
+    result = {
+        "name": f"{file_suite}: {case_name}" if file_suite else case_name,
+        "status": status,
+        "duration": milliseconds(case.get("time")),
+        "rawStatus": raw_status,
+    }
+
+    if suites:
+        result["suite"] = list(suites)
+    file_path = (case.get("file") or "").strip() or file_suite
+    if file_path:
+        result["filePath"] = file_path
+
+    if details:
+        marker_types = joined((marker.get("type") or "") for marker in details)
+        messages = joined((marker.get("message") or "") for marker in details)
+        traces = joined("".join(marker.itertext()) for marker in details)
+        if marker_types:
+            result["type"] = marker_types
+        if messages:
+            result["message"] = messages
+        if traces:
+            result["trace"] = traces
+
+    for tag in ("system-out", "system-err"):
+        lines = []
+        for child in case:
+            if local_name(child.tag) == tag:
+                lines.extend("".join(child.itertext()).splitlines())
+        if lines:
+            result["stdout" if tag == "system-out" else "stderr"] = lines
+
+    counts[status] += 1
+    if raw_status in raw_counts:
+        raw_counts[raw_status] += 1
+    tests.append(result)
+
+
+def walk_suite(suite, parents=()):
+    label = (suite.get("name") or "").strip()
+    suites = (*parents, label) if label else parents
+    for child in suite:
+        tag = local_name(child.tag)
+        if tag == "testcase":
+            add_test(child, suites)
+        elif tag == "testsuite":
+            walk_suite(child, suites)
+
+
+def natural_key(path):
+    return tuple(
+        (1, int(part)) if part.isdigit() else (0, part)
+        for part in re.split(r"(\d+)", path)
+    )
+
+
+paths = sorted(glob.glob(pattern), key=natural_key)
+for path in paths:
+    try:
+        root = ET.parse(path).getroot()
+        if local_name(root.tag) == "testsuite":
+            walk_suite(root)
+        else:
+            for child in root:
+                if local_name(child.tag) == "testsuite":
+                    walk_suite(child)
+                elif local_name(child.tag) == "testcase":
+                    add_test(child, ())
+    except (OSError, ET.ParseError) as error:
+        print(
+            f"[verifier] WARNING: cannot parse JUnit report {path}: {error}",
+            file=sys.stderr,
+        )
+
+duration = sum(test["duration"] for test in tests)
+report = {
+    "reportFormat": "CTRF",
+    "specVersion": "1.0.0",
+    "results": {
+        "tool": {"name": "node"},
+        "summary": {
+            "tests": len(tests),
+            "passed": counts["passed"],
+            "failed": counts["failed"],
+            "skipped": counts["skipped"],
+            "pending": 0,
+            "other": 0,
+            "start": 0,
+            "stop": 0,
+            "duration": duration,
+            "suites": len({
+                tuple(test.get("suite", ()))
+                for test in tests
+            }),
+            "extra": raw_counts,
+        },
+        "tests": tests,
+    },
+}
+
+os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
+with open(output, "w", encoding="utf-8") as handle:
+    json.dump(report, handle, indent=2, ensure_ascii=False)
+    handle.write("\n")
+
+print(
+    f"[verifier] wrote {len(tests)} CTRF results "
+    f"from {len(paths)} JUnit files to {output}"
+)
+PY
 }
 
 rm -f /logs/verifier/base-*.xml /logs/verifier/base-*.raw \
@@ -72,10 +251,10 @@ for i in "${!NEW_FILES[@]}"; do
   run_node_file new "$i" "${NEW_FILES[$i]}"
 done
 
-junit-to-ctrf '/logs/verifier/base-*.xml' \
-  -o /logs/verifier/base-ctrf.json -t node --use-suite-name >> "$RUN_LOG" 2>&1
-junit-to-ctrf '/logs/verifier/new-*.xml' \
-  -o /logs/verifier/new-ctrf.json -t node --use-suite-name >> "$RUN_LOG" 2>&1
+junit_to_ctrf '/logs/verifier/base-*.xml' \
+  /logs/verifier/base-ctrf.json >> "$RUN_LOG" 2>&1
+junit_to_ctrf '/logs/verifier/new-*.xml' \
+  /logs/verifier/new-ctrf.json >> "$RUN_LOG" 2>&1
 
 ctrf_check() {
   if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$1" 2>/dev/null; then
