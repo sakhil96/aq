@@ -1,0 +1,3 @@
+[metadata]
+display_title = "Add an Atomic Month-End Production Close"
+display_description = "Collect monthly field measurements, allocate battery volumes to wells, settle owner proceeds, and emit deterministic close artifacts."
