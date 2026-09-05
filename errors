@@ -1,0 +1,670 @@
+🔎 Checking task quality...
+/opt/[harness]-venv/lib/python3.13/site-packages/[internal]/models/task/config.py:834: UserWarning: Artifact sources overlap: '/logs/artifacts' (service 'main') and '/logs/artifacts/model.patch' (service 'main') map to the same location under the shared artifacts dir; on collision the first is kept and the rest are skipped at collection time.
+  validate_artifact_entries(
+  1/1 Mean: 1.000 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 0:03:48 0:00:00                           Task Quality Checks: task                            
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Check                           ┃ Outcome ┃ Explanation                      ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Behavior In Task Description    │ fail    │ The prose names the six exports  │
+│                                 │         │ and broad workflow, but the      │
+│                                 │         │ tests require many               │
+│                                 │         │ solution-created contracts       │
+│                                 │         │ absent from it: function         │
+│                                 │         │ signatures, request aliases,     │
+│                                 │         │ result object fields, artifact   │
+│                                 │         │ schemas/IDs, rounding precision, │
+│                                 │         │ validation boundaries, and       │
+│                                 │         │ error/status semantics. A solver │
+│                                 │         │ cannot derive this public API    │
+│                                 │         │ shape from the brief alone.      │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Behavior In Tests               │ pass    │ All 49 new tests are graded and  │
+│                                 │         │ collectively exercise            │
+│                                 │         │ collection, monthly              │
+│                                 │         │ filtering/deduplication,         │
+│                                 │         │ allocation and residual          │
+│                                 │         │ reconciliation, DOI settlement   │
+│                                 │         │ and holds, artifact generation,  │
+│                                 │         │ atomic rejection, deterministic  │
+│                                 │         │ output, and empty closes. The    │
+│                                 │         │ broad promised workflow cannot   │
+│                                 │         │ be skipped while earning reward  │
+│                                 │         │ 1.                               │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Anti Cheating Measures          │ pass    │ Hidden tests and solution are    │
+│                                 │         │ confined to task/verifier        │
+│                                 │         │ artifacts, baseline tests are    │
+│                                 │         │ restored and blob-checked, new   │
+│                                 │         │ test paths are fixed, and        │
+│                                 │         │ grading consumes reports         │
+│                                 │         │ generated after applying only    │
+│                                 │         │ model.patch. No agent-visible    │
+│                                 │         │ runner configuration provides a  │
+│                                 │         │ plausible reward bypass.         │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Tests Or Solution In Image      │ pass    │ environment/Dockerfile only      │
+│                                 │         │ references the published v4 base │
+│                                 │         │ image and does not copy or embed │
+│                                 │         │ tests or solution content.       │
+│                                 │         │ Hidden files are copied only by  │
+│                                 │         │ tests/Dockerfile into the        │
+│                                 │         │ separate verifier image.         │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Test Deps In Image              │ pass    │ test.sh uses node, git, Bash     │
+│                                 │         │ utilities, and Python already    │
+│                                 │         │ supplied at verifier-image build │
+│                                 │         │ time; Python has a build-time    │
+│                                 │         │ fallback installation in         │
+│                                 │         │ tests/Dockerfile. It performs no │
+│                                 │         │ verification-time installation   │
+│                                 │         │ or download.                     │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Hardcoded Solution              │ pass    │ solution.patch adds substantial  │
+│                                 │         │ reusable implementations for     │
+│                                 │         │ measurement, allocation,         │
+│                                 │         │ settlement, artifacts, and       │
+│                                 │         │ orchestration rather than        │
+│                                 │         │ branching on fixture inputs.     │
+│                                 │         │ solve.sh remains a conventional  │
+│                                 │         │ apply, branch, add, and commit   │
+│                                 │         │ wrapper.                         │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Informative Test Structure      │ pass    │ The runner clearly separates     │
+│                                 │         │ fixed new suites from pristine   │
+│                                 │         │ base suites, comments suite      │
+│                                 │         │ integrity and report conversion, │
+│                                 │         │ logs each file and exit status,  │
+│                                 │         │ and uses descriptive test names. │
+│                                 │         │ The JUnit-to-CTRF path is        │
+│                                 │         │ explicit and followable.         │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Structured Data Schema          │ fail    │ This feature's public functions  │
+│                                 │         │ consume and produce extensive    │
+│                                 │         │ structured objects, but          │
+│                                 │         │ instruction.md supplies no       │
+│                                 │         │ normative request or result      │
+│                                 │         │ schema. Tests assert fields such │
+│                                 │         │ as controls, factors, owner      │
+│                                 │         │ lines, reports, snapshots,       │
+│                                 │         │ journals, totals, statuses,      │
+│                                 │         │ warnings, and aliases that the   │
+│                                 │         │ solver would have to guess.      │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Pinned Dependencies             │ pass    │ Both images use the same         │
+│                                 │         │ versioned published task image,  │
+│                                 │         │ Node's built-in test/JUnit       │
+│                                 │         │ reporter defines grading, and no │
+│                                 │         │ moving npm/pip reporter is       │
+│                                 │         │ installed. The conditional       │
+│                                 │         │ OS-package fallback occurs at    │
+│                                 │         │ verifier build time and does not │
+│                                 │         │ introduce a separately moving    │
+│                                 │         │ grading framework.               │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Typos                           │ fail    │ The exact public API list        │
+│                                 │         │ contains the merged identifier   │
+│                                 │         │ text 'normalizeCloseRequestand   │
+│                                 │         │ closeProductionMonth', which can │
+│                                 │         │ obscure that these are two       │
+│                                 │         │ exports. The request also        │
+│                                 │         │ contains conspicuous             │
+│                                 │         │ misspellings and missing words   │
+│                                 │         │ (for example 'irrevelant'),      │
+│                                 │         │ making an exact-match surface    │
+│                                 │         │ ambiguous.                       │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ File Reference Mentioned        │ pass    │ The tests do not require the     │
+│                                 │         │ solver to create a named         │
+│                                 │         │ external output file or invoke   │
+│                                 │         │ an undocumented command; they    │
+│                                 │         │ exercise public exports, which   │
+│                                 │         │ the instruction explicitly says  │
+│                                 │         │ belong in the public barrel. The │
+│                                 │         │ instruction does not point to a  │
+│                                 │         │ nonexistent repository file.     │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Separate Verifier Integrity     │ pass    │ task.toml selects separate mode; │
+│                                 │         │ pre_artifacts.sh captures the    │
+│                                 │         │ committed diff from the same     │
+│                                 │         │ base hash used by config and     │
+│                                 │         │ test.sh; tests/Dockerfile        │
+│                                 │         │ extends the published image and  │
+│                                 │         │ copies only verifier content.    │
+│                                 │         │ The grader applies model.patch   │
+│                                 │         │ to a pristine checkout, and      │
+│                                 │         │ test.sh reads only verifier/log  │
+│                                 │         │ paths plus that patched          │
+│                                 │         │ checkout.                        │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Git Time Travel Hygiene         │ pass    │ The platform-managed environment │
+│                                 │         │ Dockerfile is untouched and      │
+│                                 │         │ contains only the versioned      │
+│                                 │         │ image reference, with no         │
+│                                 │         │ checkout copy, fetch, remote,    │
+│                                 │         │ tag, or ref-restoration step.    │
+│                                 │         │ Nothing in the task artifacts    │
+│                                 │         │ reintroduces repository history  │
+│                                 │         │ or solution refs into the agent  │
+│                                 │         │ image.                           │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ F2P P2P Consistency             │ pass    │ There are 49 non-overlapping f2p │
+│                                 │         │ IDs, exactly matching all 49     │
+│                                 │         │ tests added by test.patch and    │
+│                                 │         │ both files in NEW_FILES under    │
+│                                 │         │ name-based CTRF reporting. The   │
+│                                 │         │ base lacks the six new exports,  │
+│                                 │         │ while solution.patch supplies    │
+│                                 │         │ them; the 189 p2p IDs are        │
+│                                 │         │ restored base tests, and the     │
+│                                 │         │ only existing behavior           │
+│                                 │         │ adjustment does not disturb      │
+│                                 │         │ their documented 60F case.       │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Report Integrity                │ pass    │ Every base and new test file is  │
+│                                 │         │ run through Node's JUnit         │
+│                                 │         │ reporter, wrapped, converted to  │
+│                                 │         │ each configured CTRF report, and │
+│                                 │         │ parsed with absence treated as   │
+│                                 │         │ failure. Runs continue after     │
+│                                 │         │ failures so reports are          │
+│                                 │         │ produced; malformed or missing   │
+│                                 │         │ reports cannot turn absent       │
+│                                 │         │ whitelisted tests into passes.   │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Instruction Self Containedness  │ fail    │ Although it does not mention     │
+│                                 │         │ hidden tests or external links,  │
+│                                 │         │ success requires public          │
+│                                 │         │ contracts not present in the     │
+│                                 │         │ instruction or identified base   │
+│                                 │         │ schemas, including exact input   │
+│                                 │         │ aliases, output records,         │
+│                                 │         │ precision rules, metadata, and   │
+│                                 │         │ failure behavior. Thus the       │
+│                                 │         │ instruction plus base checkout   │
+│                                 │         │ is insufficient to reproduce     │
+│                                 │         │ tested behavior.                 │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Instruction Reads Naturally     │ pass    │ Despite poor grammar and         │
+│                                 │         │ spacing, it is direct pre-change │
+│                                 │         │ prose in the register of an      │
+│                                 │         │ informal engineer request. It    │
+│                                 │         │ does not narrate a completed     │
+│                                 │         │ diff, expose verifier internals, │
+│                                 │         │ or use conspicuous               │
+│                                 │         │ formulaic/generated signposting. │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Instruction Concise             │ pass    │ The request is only five compact │
+│                                 │         │ behavioral paragraphs (about     │
+│                                 │         │ 1.8k characters) for a roughly   │
+│                                 │         │ 2.2k-line implementation. It     │
+│                                 │         │ contains little background or    │
+│                                 │         │ repetition; its defect is        │
+│                                 │         │ under-specification rather than  │
+│                                 │         │ padding.                         │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Instruction Behavior Focused    │ pass    │ The request describes            │
+│                                 │         │ user-visible workflow behavior   │
+│                                 │         │ and names only the required      │
+│                                 │         │ public exports. It does not      │
+│                                 │         │ prescribe file layout, private   │
+│                                 │         │ helpers, implementation          │
+│                                 │         │ algorithms, or other white-box   │
+│                                 │         │ housekeeping.                    │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Behavioral Test Surface         │ pass    │ Tests import only the public     │
+│                                 │         │ barrel and drive the six         │
+│                                 │         │ promised public functions plus   │
+│                                 │         │ pre-existing public normalizers. │
+│                                 │         │ Assertions concern returned      │
+│                                 │         │ records, errors, determinism,    │
+│                                 │         │ immutability, reconciliation,    │
+│                                 │         │ and accounting outcomes rather   │
+│                                 │         │ than private helpers or internal │
+│                                 │         │ call patterns.                   │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Environment Cleanliness         │ pass    │ The task uses a published        │
+│                                 │         │ project image, runs all          │
+│                                 │         │ immutable base test files as p2p │
+│                                 │         │ coverage, and contains no        │
+│                                 │         │ agent-visible solution fragment  │
+│                                 │         │ or intended-fix TODO in the      │
+│                                 │         │ environment definition. The      │
+│                                 │         │ verifier also checks restored    │
+│                                 │         │ baseline test blobs before       │
+│                                 │         │ execution.                       │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Implementation Acceptance       │ fail    │ Relative to the very broad       │
+│ Breadth                         │         │ instruction, the tests           │
+│                                 │         │ overconstrain an undocumented    │
+│                                 │         │ reference design: numerous       │
+│                                 │         │ aliases and exact result keys,   │
+│                                 │         │ four-/three-/eight-decimal       │
+│                                 │         │ policies, close-day metadata,    │
+│                                 │         │ artifact record shapes and ID    │
+│                                 │         │ behavior, partial-error          │
+│                                 │         │ handling, and nuanced            │
+│                                 │         │ normalization defaults. A        │
+│                                 │         │ legitimate implementation of the │
+│                                 │         │ stated workflow with a different │
+│                                 │         │ public shape would fail.         │
+├─────────────────────────────────┼─────────┼──────────────────────────────────┤
+│ Solution Originality            │ pass    │ The patch is a cohesive,         │
+│                                 │         │ purpose-built close workflow     │
+│                                 │         │ integrated with existing         │
+│                                 │         │ normalizers and allocation       │
+│                                 │         │ engines. It has no copied-test   │
+│                                 │         │ references, fixture-specific     │
+│                                 │         │ branches, foreign metadata, or   │
+│                                 │         │ indication that it merely        │
+│                                 │         │ restores a duplicate/reverted    │
+│                                 │         │ implementation reachable from    │
+│                                 │         │ the base tree.                   │
+└─────────────────────────────────┴─────────┴──────────────────────────────────┘
+Agent cost: $0.0000
+
+Report: /work/check-jobs/check/check_report.json
+Inspect results by running `[internal] view /work/check-jobs`
+In the viewer, open a trial's Artifacts tab to read its check-result.json, and 
+use ← / → to switch between tasks.
+Skipping image OS validation for python:3.13-slim: docker inspect returned 1
+Uploading environment/ to /app
+Running command: if command -v apt-get &>/dev/null; then  apt-get update && apt-get install -y curl build-essential git; elif command -v apk &>/dev/null; then  apk add --no-cache curl bash build-base git python3 py3-pip; elif command -v yum &>/dev/null; then  yum install -y curl git gcc make; elif command -v dnf &>/dev/null; then  dnf install -y curl git gcc make; else  echo "Warning: No known package manager found, assuming build tools are available" >&2; fi
+Command outputs captured
+Running command: set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then  curl -LsSf https://astral.sh/uv/0.7.13/install.sh | sh; fi && if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null; then  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"; fi && if [ -f "$HOME/.local/bin/env" ]; then source "$HOME/.local/bin/env"; fi && export PATH="$HOME/.local/bin:$PATH" && uv tool install [harness] --with '[internal][proxy]' && [harness] --help
+Command outputs captured
+Running command: if [ -f "$HOME/.local/bin/env" ]; then . "$HOME/.local/bin/env"; else export PATH="$HOME/.local/bin:$PATH"; fi; [harness] --yolo --model=[internal]/[model] --task='You are reviewing a [internal] task for quality and completeness. Judge whether the task'"'"'s artifacts meet the criteria below, and provide a short rationale for each.
+
+The task to review is at /app/task. Here is the complete file tree:
+
+<file_tree>
+environment/Dockerfile
+instruction.md
+pre_artifacts.sh
+solution/solution.patch
+solution/solve.sh
+task.toml
+tests/Dockerfile
+tests/config.json
+tests/grader.py
+tests/test.patch
+tests/test.sh
+</file_tree>
+
+Read ALL files under /app/task (e.g., "/app/task/instruction.md", "/app/task/tests/test_state.py"). You must examine every file - including data files, configuration files, and any supporting scripts — not just the main files. This is critical for accurate evaluation.
+
+Evaluate each criterion one at a time. For each criterion, think about and list reasons why this task may or may not meet it before making your final judgment. When a criterion fails, explain why it fails based on the criteria description. Do not suggest what the author should do to fix or improve the task.
+
+Do not modify any files under /app/task.
+
+Guidance:
+- behavior_in_task_description: The agent never sees tests/ but has the FULL repository at the base commit. Every contract the f2p tests assert about what the SOLUTION must produce — new public API names, signatures the solution introduces, output and file formats, JSON/schema keys, error semantics, exact strings when asserted — must be derivable from instruction.md plus the base checkout. Do NOT require the instruction to name things the solver never writes: helpers defined inside the test files themselves, test fixture data, or symbols that already exist in the repository at the base commit (a competent engineer discovers those by reading the repo). PASS if a competent engineer with the instruction and the repo could satisfy the tests. FAIL only when tests assert solution-produced details that are absent or contradicted: output shapes never documented, exact strings or names the solution must emit that the instruction never states, or edge-case behavior the instruction never mentions.
+- behavior_in_tests: Cross-check the instruction against tests/test.patch and the f2p_node_ids in tests/config.json. PASS if the named f2p tests genuinely cover the instruction'"'"'s required behavior, so an implementation that skips a promised requirement cannot reach reward 1. FAIL if significant promised behavior goes untested — the verifier would accept an incomplete implementation — or if the tests check something materially different from what the instruction asks for.
+- anti_cheating_measures: The agent sees only the repository at the base commit; tests/ and solution/ are hidden, and grading applies only the committed diff inside a pristine verifier container. Check that nothing reachable from the agent environment leaks answers (fixture files containing expected outputs, comments or docs describing the fix, recoverable history), and that the graded outcome cannot be flipped from inside the agent environment — e.g. by editing test-runner configuration or import-time hooks (conftest.py, sitecustomize.py, pytest.ini, tox.ini, setup.cfg, pyproject/jest test config) in ways the verifier would honor. PASS if the setup makes honest work the only plausible route to reward. FAIL if answers are reachable or grading is gameable from the agent side.
+- tests_or_solution_in_image: The agent image is built from the repository worktree plus the environment Dockerfile only; hidden test content bakes exclusively into the verifier image via tests/Dockerfile. PASS if nothing from tests/ or solution/ (test.patch content, expected outputs, the reference solution, grader configuration) is copied into or reconstructable from the agent-visible image. FAIL if the environment Dockerfile copies, downloads, or embeds any of it.
+- test_deps_in_image: The verifier runs sealed (allow_internet = false), so every tool test.sh needs — test frameworks, reporters/converters that produce the named per-test reports, runtime interpreters — must already exist in the image at build time. PASS if test.sh only uses what the image provides. FAIL if test.sh installs packages or downloads tools at verification time: that both violates the sealed contract and makes the verifier a flake source.
+- hardcoded_solution: solution/solution.patch must implement the required behavior in the repository'"'"'s source; solve.sh is a uniform apply-and-commit wrapper and must stay that way. PASS if the patch is a real implementation an agent could plausibly write. FAIL if it hardcodes expected outputs (literal answer strings the tests match), special-cases the exact inputs the tests use, or stubs interfaces to satisfy assertions without implementing the promised behavior.
+- informative_test_structure: The task-specific run-tests section of tests/test.sh should be organized and commented (which suites run, what each covers), test names in reports should be meaningful, and report wiring should be easy to follow. Advisory: PASS if a reviewer can follow what is verified and where; FAIL if the verification flow is opaque or misleadingly structured.
+- structured_data_schema: If the agent must produce structured data (APIs, JSON/CSV files, DB schemas, wire formats), the exact schema must be documented in instruction.md or a referenced file that exists at the base commit. PASS if the schema is explicit and normative, or if the task requires no structured output (not_applicable also acceptable then). FAIL if only examples are given without marking them normative, leaving tests to assert fields the agent had to guess.
+- pinned_dependencies: Reproducibility comes from the published task image, not from Dockerfile pins — do not flag unpinned apt packages or loose floors when the frozen image is what runs. DO flag: an unpinned tool whose version defines grading (report converters/reporters, the test framework itself) installed from a moving tag, broken pin syntax, or a checked-in lockfile the environment Dockerfile ignores in a way that could shift behavior between build and grading.
+- typos: Look closely at file names, paths, CLI commands, test node ids in tests/config.json, and identifiers the instruction asks for — these are exact-match surfaces. PASS if none found. FAIL if a typo could make an honest implementation miss (wrong path in the instruction, misspelled node id that can never match a report, command that does not exist in the image).
+- file_reference_mentioned: Output files, commands, or paths the tests check must be named explicitly in instruction.md; anything the instruction references (scripts, docs, fixtures) must exist in the repository at the base commit. PASS if both hold. FAIL if the tests check artifacts the instruction never names, or the instruction points at files that do not exist in the agent'"'"'s checkout.
+- separate_verifier_integrity: The verifier runs in its own container (environment_mode "separate"); the agent environment must contain no path to tests/. Grading input is exclusively the committed diff — the model.patch artifact pre_artifacts.sh captures (git diff from the base commit to HEAD) — applied inside the pristine verifier container. Check: pre_artifacts.sh is the untouched template with the correct base commit; tests/test.sh and the grader read only /tests and /logs plus the patched checkout; nothing in grading depends on uncommitted agent-environment state, leftover processes, or files outside the committed diff; tests/Dockerfile builds FROM the published task image and copies only tests/ content. FAIL if the verifier could see agent state other than the committed patch, if tests are reachable from the agent environment, or if any step bypasses the committed-patch flow.
+- git_time_travel_hygiene: In the agent image, the repository'"'"'s default branch must point AT the task'"'"'s base commit as a real checkout (not a detached HEAD), with no future commits, no future tags, no other branches, no remotes, and no reflog entries — the reference solution must not be derivable from .git in any form. Verify the environment Dockerfile keeps the platform'"'"'s history-trimming steps intact and that no later instruction reintroduces refs, fetches history, adds remotes, or copies another checkout in. FAIL on any channel that would let the agent recover post-base history, the solution, or hints of either from repository metadata.
+- f2p_p2p_consistency: f2p_node_ids must name tests introduced or modified by tests/test.patch that FAIL on the base repository and PASS once solution.patch is applied; p2p_node_ids must pass on both sides. Check: f2p is non-empty; f2p and p2p do not overlap; every listed id matches how the configured grade.format derives node ids from the reports (suite-qualified vs bare name, per tests/config.json); every listed test is actually run by a suite in test.sh so its name can appear in a report. FAIL if any listed id can never appear in the reports, if an f2p test would already pass without the solution (vacuous), or if a p2p test fails with the solution applied (regression).
+- report_integrity: Grading parses the named per-test reports (CTRF or JUnit) listed in grade.reports, and a test absent from every report counts as failed — that is the safety backstop. Check the run-tests section: each suite routes through a reporter into the configured report paths; reporter exit codes are never used to skip report writing; no early-exit, filter, or framework configuration path can make a test disappear from the reports while the run claims success; skipped tests are not silently converted to passes. FAIL if a test can vanish from grading with a passing outcome, if reports can be fabricated or pre-staged, or if the report wiring games the absence-equals-failure rule.
+- instruction_self_containedness: The instruction must stand alone: no references to hidden tests ("make the suite pass"), no links to issues, pull requests, or upstream discussions, no reliance on documents that do not exist in the repository at the base commit. The closing work convention (work on a branch, commit your changes) is expected boilerplate. The base checkout COUNTS as available information: pointing the solver at existing modules, patterns, schemas, or data files in the repo is fine, and the instruction never needs to restate symbols, helpers, or values that already exist in the repo or that only the hidden tests define internally. FAIL only if succeeding requires information outside the instruction plus the base checkout — e.g. solution-produced names, formats, or exact values that appear nowhere in either — or if the instruction leaks verifier internals (test file names, node ids, report paths) instead of describing behavior.
+- instruction_reads_naturally: The instruction should read like something a busy engineer typed to a capable colleague: direct prose in a natural developer register, written as a request made BEFORE the change existed. Present-tense contract statements of the desired end state ("X gains Y", "the parser returns Z", "this feature provides…") are the normal register of a work request and never fail on their own; FAIL only when the text narrates COMPLETED work — past-tense descriptions of the diff ("was added", "were introduced", "the new module now…") or references to the change as an accomplished fact. FAIL when it reads as generated or templated writing: formulaic transitions and signposting, inflated significance ("plays a crucial role"), hedged requirements ("it is important to note", "could potentially"), forced not-only-but-also constructions, or filler that restates the same requirement in different words. Dense requirement statements are not a register violation; judge structure under instruction_behavior_focused, not here. A plain, even terse, human register passes. The required closing line about working on a branch and committing is platform boilerplate — never count it as evidence in either direction. This is a gate, not a nitpick: FAIL only for clear violations a reviewer would flag on a first read; when genuinely borderline, pass.
+- instruction_concise: FAIL when the instruction is padded: background no implementer needs, repeated requirements, long preambles, or step-by-step narration of the obvious. Judge density from the instruction itself against the scale of the requested change — mechanical word bounds are enforced elsewhere, and if the reference solution is missing or truncated in your material, judge from the instruction alone rather than answering not_applicable. When the solution patch is visible, use it as a sanity check: strong instructions typically run about 3 characters per added solution line and almost never beyond about 6.5. Treat case-by-case enumeration as test-suite transcription only when it pushes the instruction toward or past that ceiling — exact names, strings, or values the tests assert that appear nowhere in the repository are required content, never padding. The bar is unambiguous intent, not minimalism: do not fail an instruction for leaving to discovery what the repository'"'"'s conventions or ordinary language already determine, and do not demand more enumeration than the band allows. Do not fail for a heading or a short bullet list where a real engineer plausibly would use one. When genuinely borderline, pass.
+- instruction_behavior_focused: The instruction is a work request, not a spec sheet: the reader is expected to explore the repository and make implementation decisions. The default shape of a strong instruction is heading-free, behavior-focused prose; a requirements heading over a numbered ledger of signatures and error tables is the rarest real shape and reads as a transcription ticket, not a developer'"'"'s message. The line is the test-visible surface, so before calling a named detail a violation, cross-check it against tests/test.patch: a path, type, method, signature, field list, or exact string that the held-out tests import, construct, call, or assert on is surface the instruction is REQUIRED to fix, however exhaustive the resulting list looks — a task introducing a large new API legitimately names many symbols. But test-visibility must be earned the way a CONSUMER of the feature would use it. For a library, the importable classes, methods, and attributes the tests drive ARE its consumer surface, even when they live on internal-sounding objects; for an application, consumers see its endpoints, commands, and outputs. What never becomes surface by being asserted is housekeeping no consumer of either kind observes: module file layout dictated path-by-path, storage or ORM options and relation names, string representations, admin or migration mechanics. An instruction that pins that housekeeping at EVERY layer of the change — so the tests could have been transcribed from the instruction without reading the repository — is laundering a blueprint through white-box tests and FAILS even though each detail is nominally tested; the same housekeeping confined to a corner of an otherwise behavior-focused request falls under the pinned-preference allowance and passes. Real engineers also pin an occasional internal preference (which module something belongs in, extend X rather than introduce Y, compare by sorting): one or two pinned choices inside otherwise behavior-focused prose PASS. FAIL only when dictating untested internals is the instruction'"'"'s pervasive mode: a file-by-file blueprint of the implementation, internal constants, helpers, or classes named throughout, signature blocks or parameter/default tables the tests never compile against, literal code, exact wording for messages the tests never assert, or field-by-field enumerations of structures the tests never read. If tests/test.patch is missing or truncated in your material, do not wave detail through as plausibly test-visible: this platform requires behavioral tests, so detail only a white-box test could observe — dictated internal module layout, storage options, internal helper or query-class names, string representations, admin or migration mechanics — is internal regardless, and an instruction shaped as a file-by-file blueprint FAILS on shape alone. Stating a boundary (inclusive vs exclusive, empty vs whitespace-only, casing, a non-obvious default) is right exactly where two competent implementers would diverge and the tests distinguish it. Everything below the tested surface belongs to the implementer; when genuinely borderline, pass.
+- behavioral_test_surface: Tests must exercise public APIs, CLI invocations, and observable outputs so that any behaviorally-correct implementation passes, regardless of its internal shape. FAIL if tests import private modules or helpers the instruction never promises, assert internal call patterns or private symbol names, or pin implementation details (exact internal function names, private data layouts, incidental ordering) beyond the documented contract. PASS when a differently-structured but correct implementation would still pass.
+- environment_cleanliness: At the base commit the built image must be a sound working environment: dependencies installed, the project builds, and the pre-existing suites relevant to the p2p tests are green — a broken baseline turns p2p grading into noise. There must be no scaffolding leftovers: solution fragments, TODO/FIXME markers pointing at the intended fix, editor or debug artifacts, or answer-bearing files. FAIL if the baseline is broken at base or the environment carries files that hint at or contain the solution.
+- implementation_acceptance_breadth: Read the f2p tests against the instruction'"'"'s contract and ask whether a correct solution shaped differently from solution.patch would pass: tolerant of naming beyond what the instruction fixes, of internal structure, of equivalent error messages unless exact text is documented, and of ordering unless order is part of the contract. FAIL if the tests are overfit to the reference implementation — asserting its private helpers, exact incidental strings, or structural choices — so that a legitimate alternative implementation would be rejected.
+- solution_originality: The solution must not be derivable from anything the agent can reach: since post-base history is stripped, check that the change is not present elsewhere in the base checkout (a vendored copy of the fix, a revert the patch merely re-applies, duplicated code the patch copies from a sibling module) and that the patch does not read as a wholesale import of an existing upstream change (foreign style, unrelated hunks, metadata remnants). PASS if the solution reads as purpose-built for this instruction. FAIL if it appears copied from material reachable in the environment or from an existing published change.
+
+# Output
+
+When you have evaluated every criterion, write your result to a file named check-result.json in your working directory. It must be a single JSON object with one key per criterion above; each value must be an object with:
+- "outcome": one of "pass", "fail", or "not_applicable"
+- "explanation": a short rationale
+
+The file must validate against this JSON schema:
+
+<output_schema>
+{
+  "$defs": {
+    "CheckOutcome": {
+      "enum": [
+        "pass",
+        "fail",
+        "not_applicable"
+      ],
+      "title": "CheckOutcome",
+      "type": "string"
+    },
+    "QualityCheckModel": {
+      "properties": {
+        "explanation": {
+          "title": "Explanation",
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/CheckOutcome"
+        }
+      },
+      "required": [
+        "explanation",
+        "outcome"
+      ],
+      "title": "QualityCheckModel",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "behavior_in_task_description": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "behavior_in_tests": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "anti_cheating_measures": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "tests_or_solution_in_image": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "test_deps_in_image": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "hardcoded_solution": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "informative_test_structure": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "structured_data_schema": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "pinned_dependencies": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "typos": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "file_reference_mentioned": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "separate_verifier_integrity": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "git_time_travel_hygiene": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "f2p_p2p_consistency": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "report_integrity": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "instruction_self_containedness": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "instruction_reads_naturally": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "instruction_concise": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "instruction_behavior_focused": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "behavioral_test_surface": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "environment_cleanliness": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "implementation_acceptance_breadth": {
+      "$ref": "#/$defs/QualityCheckModel"
+    },
+    "solution_originality": {
+      "$ref": "#/$defs/QualityCheckModel"
+    }
+  },
+  "required": [
+    "behavior_in_task_description",
+    "behavior_in_tests",
+    "anti_cheating_measures",
+    "tests_or_solution_in_image",
+    "test_deps_in_image",
+    "hardcoded_solution",
+    "informative_test_structure",
+    "structured_data_schema",
+    "pinned_dependencies",
+    "typos",
+    "file_reference_mentioned",
+    "separate_verifier_integrity",
+    "git_time_travel_hygiene",
+    "f2p_p2p_consistency",
+    "report_integrity",
+    "instruction_self_containedness",
+    "instruction_reads_naturally",
+    "instruction_concise",
+    "instruction_behavior_focused",
+    "behavioral_test_surface",
+    "environment_cleanliness",
+    "implementation_acceptance_breadth",
+    "solution_originality"
+  ],
+  "title": "QualityCheckResponse",
+  "type": "object"
+}
+</output_schema>
+
+check-result.json in your working directory is your only deliverable.
+' --output=/logs/agent/[harness].trajectory.json --cost-limit 0 -c mini -c model.model_kwargs.extra_headers.X-Session-ID=check-task__w58ZUez__agent --exit-immediately 2>&1 </dev/null | tee /logs/agent/[harness].txt
+Command outputs captured
+Collecting main service artifacts
+{
+  "results": [
+    {
+      "checks": {
+        "behavior_in_task_description": {
+          "explanation": "The prose names the six exports and broad workflow, but the tests require many solution-created contracts absent from it: function signatures, request aliases, result object fields, artifact schemas/IDs, rounding precision, validation boundaries, and error/status semantics. A solver cannot derive this public API shape from the brief alone.",
+          "outcome": "fail"
+        },
+        "behavior_in_tests": {
+          "explanation": "All 49 new tests are graded and collectively exercise collection, monthly filtering/deduplication, allocation and residual reconciliation, DOI settlement and holds, artifact generation, atomic rejection, deterministic output, and empty closes. The broad promised workflow cannot be skipped while earning reward 1.",
+          "outcome": "pass"
+        },
+        "anti_cheating_measures": {
+          "explanation": "Hidden tests and solution are confined to task/verifier artifacts, baseline tests are restored and blob-checked, new test paths are fixed, and grading consumes reports generated after applying only model.patch. No agent-visible runner configuration provides a plausible reward bypass.",
+          "outcome": "pass"
+        },
+        "tests_or_solution_in_image": {
+          "explanation": "environment/Dockerfile only references the published v4 base image and does not copy or embed tests or solution content. Hidden files are copied only by tests/Dockerfile into the separate verifier image.",
+          "outcome": "pass"
+        },
+        "test_deps_in_image": {
+          "explanation": "test.sh uses node, git, Bash utilities, and Python already supplied at verifier-image build time; Python has a build-time fallback installation in tests/Dockerfile. It performs no verification-time installation or download.",
+          "outcome": "pass"
+        },
+        "hardcoded_solution": {
+          "explanation": "solution.patch adds substantial reusable implementations for measurement, allocation, settlement, artifacts, and orchestration rather than branching on fixture inputs. solve.sh remains a conventional apply, branch, add, and commit wrapper.",
+          "outcome": "pass"
+        },
+        "informative_test_structure": {
+          "explanation": "The runner clearly separates fixed new suites from pristine base suites, comments suite integrity and report conversion, logs each file and exit status, and uses descriptive test names. The JUnit-to-CTRF path is explicit and followable.",
+          "outcome": "pass"
+        },
+        "structured_data_schema": {
+          "explanation": "This feature's public functions consume and produce extensive structured objects, but instruction.md supplies no normative request or result schema. Tests assert fields such as controls, factors, owner lines, reports, snapshots, journals, totals, statuses, warnings, and aliases that the solver would have to guess.",
+          "outcome": "fail"
+        },
+        "pinned_dependencies": {
+          "explanation": "Both images use the same versioned published task image, Node's built-in test/JUnit reporter defines grading, and no moving npm/pip reporter is installed. The conditional OS-package fallback occurs at verifier build time and does not introduce a separately moving grading framework.",
+          "outcome": "pass"
+        },
+        "typos": {
+          "explanation": "The exact public API list contains the merged identifier text 'normalizeCloseRequestand closeProductionMonth', which can obscure that these are two exports. The request also contains conspicuous misspellings and missing words (for example 'irrevelant'), making an exact-match surface ambiguous.",
+          "outcome": "fail"
+        },
+        "file_reference_mentioned": {
+          "explanation": "The tests do not require the solver to create a named external output file or invoke an undocumented command; they exercise public exports, which the instruction explicitly says belong in the public barrel. The instruction does not point to a nonexistent repository file.",
+          "outcome": "pass"
+        },
+        "separate_verifier_integrity": {
+          "explanation": "task.toml selects separate mode; pre_artifacts.sh captures the committed diff from the same base hash used by config and test.sh; tests/Dockerfile extends the published image and copies only verifier content. The grader applies model.patch to a pristine checkout, and test.sh reads only verifier/log paths plus that patched checkout.",
+          "outcome": "pass"
+        },
+        "git_time_travel_hygiene": {
+          "explanation": "The platform-managed environment Dockerfile is untouched and contains only the versioned image reference, with no checkout copy, fetch, remote, tag, or ref-restoration step. Nothing in the task artifacts reintroduces repository history or solution refs into the agent image.",
+          "outcome": "pass"
+        },
+        "f2p_p2p_consistency": {
+          "explanation": "There are 49 non-overlapping f2p IDs, exactly matching all 49 tests added by test.patch and both files in NEW_FILES under name-based CTRF reporting. The base lacks the six new exports, while solution.patch supplies them; the 189 p2p IDs are restored base tests, and the only existing behavior adjustment does not disturb their documented 60F case.",
+          "outcome": "pass"
+        },
+        "report_integrity": {
+          "explanation": "Every base and new test file is run through Node's JUnit reporter, wrapped, converted to each configured CTRF report, and parsed with absence treated as failure. Runs continue after failures so reports are produced; malformed or missing reports cannot turn absent whitelisted tests into passes.",
+          "outcome": "pass"
+        },
+        "instruction_self_containedness": {
+          "explanation": "Although it does not mention hidden tests or external links, success requires public contracts not present in the instruction or identified base schemas, including exact input aliases, output records, precision rules, metadata, and failure behavior. Thus the instruction plus base checkout is insufficient to reproduce tested behavior.",
+          "outcome": "fail"
+        },
+        "instruction_reads_naturally": {
+          "explanation": "Despite poor grammar and spacing, it is direct pre-change prose in the register of an informal engineer request. It does not narrate a completed diff, expose verifier internals, or use conspicuous formulaic/generated signposting.",
+          "outcome": "pass"
+        },
+        "instruction_concise": {
+          "explanation": "The request is only five compact behavioral paragraphs (about 1.8k characters) for a roughly 2.2k-line implementation. It contains little background or repetition; its defect is under-specification rather than padding.",
+          "outcome": "pass"
+        },
+        "instruction_behavior_focused": {
+          "explanation": "The request describes user-visible workflow behavior and names only the required public exports. It does not prescribe file layout, private helpers, implementation algorithms, or other white-box housekeeping.",
+          "outcome": "pass"
+        },
+        "behavioral_test_surface": {
+          "explanation": "Tests import only the public barrel and drive the six promised public functions plus pre-existing public normalizers. Assertions concern returned records, errors, determinism, immutability, reconciliation, and accounting outcomes rather than private helpers or internal call patterns.",
+          "outcome": "pass"
+        },
+        "environment_cleanliness": {
+          "explanation": "The task uses a published project image, runs all immutable base test files as p2p coverage, and contains no agent-visible solution fragment or intended-fix TODO in the environment definition. The verifier also checks restored baseline test blobs before execution.",
+          "outcome": "pass"
+        },
+        "implementation_acceptance_breadth": {
+          "explanation": "Relative to the very broad instruction, the tests overconstrain an undocumented reference design: numerous aliases and exact result keys, four-/three-/eight-decimal policies, close-day metadata, artifact record shapes and ID behavior, partial-error handling, and nuanced normalization defaults. A legitimate implementation of the stated workflow with a different public shape would fail.",
+          "outcome": "fail"
+        },
+        "solution_originality": {
+          "explanation": "The patch is a cohesive, purpose-built close workflow integrated with existing normalizers and allocation engines. It has no copied-test references, fixture-specific branches, foreign metadata, or indication that it merely restores a duplicate/reverted implementation reachable from the base tree.",
+          "outcome": "pass"
+        }
+      },
+      "cost_usd": 0.0,
+      "task_name": "task",
+      "error": null
+    }
+  ]
+}{
+  "checks": {
+    "behavior_in_task_description": {
+      "explanation": "The prose names the six exports and broad workflow, but the tests require many solution-created contracts absent from it: function signatures, request aliases, result object fields, artifact schemas/IDs, rounding precision, validation boundaries, and error/status semantics. A solver cannot derive this public API shape from the brief alone.",
+      "outcome": "fail"
+    },
+    "behavior_in_tests": {
+      "explanation": "All 49 new tests are graded and collectively exercise collection, monthly filtering/deduplication, allocation and residual reconciliation, DOI settlement and holds, artifact generation, atomic rejection, deterministic output, and empty closes. The broad promised workflow cannot be skipped while earning reward 1.",
+      "outcome": "pass"
+    },
+    "anti_cheating_measures": {
+      "explanation": "Hidden tests and solution are confined to task/verifier artifacts, baseline tests are restored and blob-checked, new test paths are fixed, and grading consumes reports generated after applying only model.patch. No agent-visible runner configuration provides a plausible reward bypass.",
+      "outcome": "pass"
+    },
+    "tests_or_solution_in_image": {
+      "explanation": "environment/Dockerfile only references the published v4 base image and does not copy or embed tests or solution content. Hidden files are copied only by tests/Dockerfile into the separate verifier image.",
+      "outcome": "pass"
+    },
+    "test_deps_in_image": {
+      "explanation": "test.sh uses node, git, Bash utilities, and Python already supplied at verifier-image build time; Python has a build-time fallback installation in tests/Dockerfile. It performs no verification-time installation or download.",
+      "outcome": "pass"
+    },
+    "hardcoded_solution": {
+      "explanation": "solution.patch adds substantial reusable implementations for measurement, allocation, settlement, artifacts, and orchestration rather than branching on fixture inputs. solve.sh remains a conventional apply, branch, add, and commit wrapper.",
+      "outcome": "pass"
+    },
+    "informative_test_structure": {
+      "explanation": "The runner clearly separates fixed new suites from pristine base suites, comments suite integrity and report conversion, logs each file and exit status, and uses descriptive test names. The JUnit-to-CTRF path is explicit and followable.",
+      "outcome": "pass"
+    },
+    "structured_data_schema": {
+      "explanation": "This feature's public functions consume and produce extensive structured objects, but instruction.md supplies no normative request or result schema. Tests assert fields such as controls, factors, owner lines, reports, snapshots, journals, totals, statuses, warnings, and aliases that the solver would have to guess.",
+      "outcome": "fail"
+    },
+    "pinned_dependencies": {
+      "explanation": "Both images use the same versioned published task image, Node's built-in test/JUnit reporter defines grading, and no moving npm/pip reporter is installed. The conditional OS-package fallback occurs at verifier build time and does not introduce a separately moving grading framework.",
+      "outcome": "pass"
+    },
+    "typos": {
+      "explanation": "The exact public API list contains the merged identifier text 'normalizeCloseRequestand closeProductionMonth', which can obscure that these are two exports. The request also contains conspicuous misspellings and missing words (for example 'irrevelant'), making an exact-match surface ambiguous.",
+      "outcome": "fail"
+    },
+    "file_reference_mentioned": {
+      "explanation": "The tests do not require the solver to create a named external output file or invoke an undocumented command; they exercise public exports, which the instruction explicitly says belong in the public barrel. The instruction does not point to a nonexistent repository file.",
+      "outcome": "pass"
+    },
+    "separate_verifier_integrity": {
+      "explanation": "task.toml selects separate mode; pre_artifacts.sh captures the committed diff from the same base hash used by config and test.sh; tests/Dockerfile extends the published image and copies only verifier content. The grader applies model.patch to a pristine checkout, and test.sh reads only verifier/log paths plus that patched checkout.",
+      "outcome": "pass"
+    },
+    "git_time_travel_hygiene": {
+      "explanation": "The platform-managed environment Dockerfile is untouched and contains only the versioned image reference, with no checkout copy, fetch, remote, tag, or ref-restoration step. Nothing in the task artifacts reintroduces repository history or solution refs into the agent image.",
+      "outcome": "pass"
+    },
+    "f2p_p2p_consistency": {
+      "explanation": "There are 49 non-overlapping f2p IDs, exactly matching all 49 tests added by test.patch and both files in NEW_FILES under name-based CTRF reporting. The base lacks the six new exports, while solution.patch supplies them; the 189 p2p IDs are restored base tests, and the only existing behavior adjustment does not disturb their documented 60F case.",
+      "outcome": "pass"
+    },
+    "report_integrity": {
+      "explanation": "Every base and new test file is run through Node's JUnit reporter, wrapped, converted to each configured CTRF report, and parsed with absence treated as failure. Runs continue after failures so reports are produced; malformed or missing reports cannot turn absent whitelisted tests into passes.",
+      "outcome": "pass"
+    },
+    "instruction_self_containedness": {
+      "explanation": "Although it does not mention hidden tests or external links, success requires public contracts not present in the instruction or identified base schemas, including exact input aliases, output records, precision rules, metadata, and failure behavior. Thus the instruction plus base checkout is insufficient to reproduce tested behavior.",
+      "outcome": "fail"
+    },
+    "instruction_reads_naturally": {
+      "explanation": "Despite poor grammar and spacing, it is direct pre-change prose in the register of an informal engineer request. It does not narrate a completed diff, expose verifier internals, or use conspicuous formulaic/generated signposting.",
+      "outcome": "pass"
+    },
+    "instruction_concise": {
+      "explanation": "The request is only five compact behavioral paragraphs (about 1.8k characters) for a roughly 2.2k-line implementation. It contains little background or repetition; its defect is under-specification rather than padding.",
+      "outcome": "pass"
+    },
+    "instruction_behavior_focused": {
+      "explanation": "The request describes user-visible workflow behavior and names only the required public exports. It does not prescribe file layout, private helpers, implementation algorithms, or other white-box housekeeping.",
+      "outcome": "pass"
+    },
+    "behavioral_test_surface": {
+      "explanation": "Tests import only the public barrel and drive the six promised public functions plus pre-existing public normalizers. Assertions concern returned records, errors, determinism, immutability, reconciliation, and accounting outcomes rather than private helpers or internal call patterns.",
+      "outcome": "pass"
+    },
+    "environment_cleanliness": {
+      "explanation": "The task uses a published project image, runs all immutable base test files as p2p coverage, and contains no agent-visible solution fragment or intended-fix TODO in the environment definition. The verifier also checks restored baseline test blobs before execution.",
+      "outcome": "pass"
+    },
+    "implementation_acceptance_breadth": {
+      "explanation": "Relative to the very broad instruction, the tests overconstrain an undocumented reference design: numerous aliases and exact result keys, four-/three-/eight-decimal policies, close-day metadata, artifact record shapes and ID behavior, partial-error handling, and nuanced normalization defaults. A legitimate implementation of the stated workflow with a different public shape would fail.",
+      "outcome": "fail"
+    },
+    "solution_originality": {
+      "explanation": "The patch is a cohesive, purpose-built close workflow integrated with existing normalizers and allocation engines. It has no copied-test references, fixture-specific branches, foreign metadata, or indication that it merely restores a duplicate/reverted implementation reachable from the base tree.",
+      "outcome": "pass"
+    }
+  }
+}{
+  "run_id": "Xvvjdox4Mvc0YYNXGen5",
+  "kind": "quality_check",
+  "heartbeat_at": "2026-09-05T14:49:45.028202+00:00",
+  "cancel_requested": false,
+  "final": true
+}
