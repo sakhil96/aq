@@ -22,6 +22,8 @@ run_log() { echo "+ $*" >> "$RUN_LOG" 2>/dev/null; "$@" 2>&1 | tee -a "$RUN_LOG"
 require_cmd() { command -v "$1" >/dev/null 2>&1 || { log "ERROR: missing $1; PATH=$PATH"; exit 127; }; }
 require_cmd node
 require_cmd python3
+require_cmd git
+export GIT_NO_REPLACE_OBJECTS=1
 
 NEW_FILES=(
   test/close/closeStages.test.js
@@ -238,14 +240,64 @@ rm -f /logs/verifier/base-*.xml /logs/verifier/base-*.raw \
   /logs/verifier/new-*.xml /logs/verifier/new-*.raw \
   /logs/verifier/base-ctrf.json /logs/verifier/new-ctrf.json
 
+# P2P tests are part of the immutable base, not the submitted worktree. Build
+# the run list from that tree, restore every file, and verify its blob before
+# executing it. This also prevents injected test files from entering the suite.
+BASE_COMMIT=8d5e16b1917e1e38ba48802f54bac48026f17503
+BASE_TEST_FILES=/logs/verifier/base-test-files.txt
+: > "$BASE_TEST_FILES"
+
+if ! git cat-file -e "${BASE_COMMIT}^{commit}" 2>> "$RUN_LOG"; then
+  log "ERROR: configured base commit is unavailable: $BASE_COMMIT"
+  exit 6
+fi
+
+while IFS= read -r file; do
+  case "$file" in
+    test/*.test.js) printf '%s\n' "$file" >> "$BASE_TEST_FILES" ;;
+  esac
+done < <(git ls-tree -r --name-only "$BASE_COMMIT" -- test | LC_ALL=C sort)
+
+if [ ! -s "$BASE_TEST_FILES" ]; then
+  log "ERROR: no pristine baseline tests found at $BASE_COMMIT"
+  exit 6
+fi
+
+restore_base_test() {
+  local file="$1"
+  local expected_blob actual_blob
+  if ! git checkout --quiet "$BASE_COMMIT" -- "$file" 2>> "$RUN_LOG"; then
+    log "ERROR: failed to restore baseline test: $file"
+    return 1
+  fi
+  expected_blob=$(git rev-parse "$BASE_COMMIT:$file" 2>> "$RUN_LOG")
+  actual_blob=$(git hash-object --no-filters -- "$file" 2>> "$RUN_LOG")
+  if [ -z "$expected_blob" ] || [ "$actual_blob" != "$expected_blob" ]; then
+    log "ERROR: baseline test integrity mismatch: $file"
+    return 1
+  fi
+}
+
+restore_failed=0
+while IFS= read -r file; do
+  restore_base_test "$file" || restore_failed=1
+done < "$BASE_TEST_FILES"
+
+if [ "$restore_failed" -ne 0 ]; then
+  exit 6
+fi
+
 set +e
 base_i=0
 while IFS= read -r file; do
-  run_node_file base "$base_i" "$file"
+  if restore_base_test "$file"; then
+    run_node_file base "$base_i" "$file"
+  else
+    printf '[verifier] base integrity exit status=6 file=%s\n' \
+      "$file" | tee -a "$RUN_LOG"
+  fi
   base_i=$((base_i + 1))
-done < <(find test -type f -name '*.test.js' \
-  ! -path 'test/close/closeStages.test.js' \
-  ! -path 'test/close/monthClose.test.js' | LC_ALL=C sort)
+done < "$BASE_TEST_FILES"
 
 for i in "${!NEW_FILES[@]}"; do
   run_node_file new "$i" "${NEW_FILES[$i]}"
